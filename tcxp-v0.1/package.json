@@ -1,0 +1,13 @@
+{
+  "name": "tcxp",
+  "version": "0.1.0",
+  "description": "Typed Context Protocol (tcxp) v0.1 reference engine, workbench, tests and Lean proofs",
+  "author": "Ron Itelman",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "python3 src/build_core.py && python3 src/build.py",
+    "verify": "node test/verify.mjs",
+    "fuzz": "node test/fuzz.mjs 2000 7"
+  },
+  "devDependencies": { "@electric-sql/pglite": "0.5.8" }
+}
