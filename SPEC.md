@@ -72,7 +72,7 @@ Meta values are readable JSON. A list is a JSON array of flat rows, one object p
 
 | Key | Shape | Meaning |
 |---|---|---|
-| `~pulse` | `[{"step":n,"at":"ISO 8601 ms","debounce_ms":300}]` | One movement of the local system. `step` counts committed addresses, not keystrokes. A commit happens after a `debounce_ms` quiet period. |
+| `~pulse` | `[{"step":n,"at":"ISO 8601 ms","debounce_ms":300,"parent":"identity"\|null}]` | One movement of the local system. `step` counts committed addresses, not keystrokes. A commit happens after a `debounce_ms` quiet period. `parent` is the identity (§8) of the previous committed state, or `null` for the first, so following parents traces how a change travels through a chain of decisions. A row without `parent` (written before it existed) reads as `null`. |
 | `~intent` | text | The natural-language question this state answers |
 | `~spikes` | `[{"id","on":[pointers],"meaning","structure","environment"}]` | Annotations (see §7) |
 | `~observe` | `[{"from","to","channel"}]` | A communication event: sender, receiver, channel |
@@ -116,6 +116,7 @@ A *reason card* is a spike whose meaning facet carries the human-readable defini
 | Canonical address is a fixed point of parse ∘ serialize | Tested (round-trip); target for a Lean proof |
 | Identity is invariant under meta and pulses | Tested; target for a Lean proof |
 | Gaps block execution | By construction; tested |
+| Every pulse `parent` is the identity of an earlier pulse in the chain | Tested on a chain through the 20 collection addresses; target for a Lean proof |
 | SQL fiber and tree evaluator agree | Tested against PostgreSQL 18.3: 49 fixed cases and 1,918 generated cases, all matching. Evidence, not proof |
 | Persistence | An address is a string; store it anywhere |
 

@@ -366,9 +366,10 @@ function commitPulse(tree) {
   if (last && last.base === withoutPulse) return;
   state.step += 1;
   const at = new Date().toISOString();
-  const uri = T.withPulse(tree, state.step, at, T.DEBOUNCE_MS);
+  const parent = last ? last.identity : null;
+  const uri = T.withPulse(tree, state.step, at, T.DEBOUNCE_MS, parent);
   const id = T.identity(tree);
-  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, changed: !last || last.identity !== id, label: (metaOf(tree, 'intent') || tree.parsed.registry + '/' + tree.parsed.path)});
+  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: (metaOf(tree, 'intent') || tree.parsed.registry + '/' + tree.parsed.path)});
   renderPulses(); syncAddressBar();
 }
 function renderPulses() {
@@ -376,8 +377,9 @@ function renderPulses() {
   if (!state.pulses.length) { list.innerHTML = `<li class="pulse-empty">No pulses yet.</li>`; }
   else list.innerHTML = state.pulses.slice().reverse().map(p => `<li class="pulse" data-step="${p.step}" title="${esc(p.uri)}">
     <span class="step">#${p.step}</span><span class="at">${esc(p.at.slice(11, 23))}</span><span class="what">${esc(p.label)}</span>
+    <span class="from" title="${p.parent ? 'Parent: ' + esc(p.parent) : 'First pulse: no parent'}">${p.parentStep === null ? '' : 'from #' + p.parentStep}</span>
     <i class="apple${p.changed ? '' : ' meta'}" title="${p.changed ? 'State changed' : 'Only meta changed'}"></i></li>`).join('');
-  $('#pulse-note').innerHTML = `<span>One pulse per committed address after a ${T.DEBOUNCE_MS} ms pause. Filled apple: the state changed. Hollow apple: only annotations or other meta changed.</span>`;
+  $('#pulse-note').innerHTML = `<span>One pulse per committed address after a ${T.DEBOUNCE_MS} ms pause. Filled apple: the state changed. Hollow apple: only annotations or other meta changed. "from #n" names the parent pulse this state came from.</span>`;
 }
 
 /* ------------------------------------------------------------ sheets */
@@ -441,8 +443,13 @@ function runTests() {
     const stripped = T.serialize(t).uri.split(/[?&]/).filter((p, i) => i === 0 || !p.startsWith('~')).reduce((a, p, i) => i === 0 ? p : a + (a.includes('?') ? '&' : '?') + p, '');
     return T.identity(T.parseURI(stripped)) === T.identity(t);
   });
-  check('A pulse never changes identity', 'Adding ~pulse=[{step, at, debounce_ms}] keeps the same identity', t => T.identity(T.parseURI(T.withPulse(t, 7, '2026-10-04T18:00:00.000Z', 300))) === T.identity(t));
-  check('Pulse round-trips', 'An address with a pulse re-serializes to the identical string', t => { const u = T.withPulse(t, 7, '2026-10-04T18:00:00.000Z', 300); return T.serialize(T.parseURI(u)).uri === u; });
+  const PARENT = T.identity(trees[0]);
+  check('A pulse never changes identity', 'Adding ~pulse=[{step, at, debounce_ms, parent}] keeps the same identity, with or without a parent', t => [null, PARENT].every(par => T.identity(T.parseURI(T.withPulse(t, 7, '2026-10-04T18:00:00.000Z', 300, par))) === T.identity(t)));
+  check('Pulse round-trips', 'An address with a pulse (parent included) re-serializes to the identical string', t => { const u = T.withPulse(t, 7, '2026-10-04T18:00:00.000Z', 300, PARENT); return T.serialize(T.parseURI(u)).uri === u; });
+  // One chain through the collection, as if a person walked it in order: each pulse names the previous identity.
+  const chain = []; trees.forEach((t, i) => { const prev = chain[chain.length - 1]; chain.push({uri: T.withPulse(t, i + 1, '2026-10-04T18:00:00.000Z', 300, prev ? prev.identity : null), identity: T.identity(t)}); });
+  { let pass = 0; chain.forEach((c, i) => { const row = T.parseURI(c.uri).parsed.meta.find(m => m[0] === 'pulse')[1][0]; if (i === 0 ? row.parent === null : chain.slice(0, i).some(e => e.identity === row.parent)) pass++; });
+    inv.push(['Every parent is an earlier pulse', 'In a pulse chain, each parent equals the identity of an earlier pulse (the first has parent null)', pass, chain.length]); }
   check('Every pointer resolves', 'Each annotation pointer lands on at least one node', t => t.spikes.length ? t.spikes.every(sp => sp.data) : null);
   check('Every lit facet resolves', 'Facet addresses resolve to notes in a registry', t => t.spikes.length ? t.spikes.every(sp => !sp.problems.length) : null);
   check('Gaps block execution', 'Any unbound variable makes execute() return a gap and run nothing', t => t.gaps.length ? T.execute(t).kind === 'gap' : null);
@@ -542,7 +549,7 @@ function init() {
   $('#reset-uri').addEventListener('click', () => selectQuery(state.queryId, {noScroll: true}));
   $('#copy-uri').addEventListener('click', e => copy(state.uri, e.currentTarget));
   $('#copy-fiber').addEventListener('click', e => { const f = state.fibers[state.fiber]; if (f) copy(f.text, e.currentTarget); });
-  $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, identity: p.identity, uri: p.uri})).join('\n'), e.currentTarget));
+  $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent, identity: p.identity, uri: p.uri})).join('\n'), e.currentTarget));
   $('#fiber-tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (!b) return; state.fiber = b.dataset.f; $('#fiber-tabs').querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === b))); $('#fiber-body').innerHTML = state.fibers[state.fiber].html; });
   $('#pulses').addEventListener('click', e => { const li = e.target.closest('.pulse'); if (!li) return; const p = state.pulses.find(x => x.step === +li.dataset.step); if (p) loadURI(p.uri); });
   $('#fit-tree').addEventListener('click', e => { state.fit = !state.fit; e.currentTarget.setAttribute('aria-pressed', String(state.fit)); e.currentTarget.textContent = state.fit ? 'Actual size' : 'Fit to width'; $('#tree-scroll').classList.toggle('fit', state.fit); });

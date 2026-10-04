@@ -817,11 +817,12 @@ function executeSQL(tree, vals) {
 }
 
 /* ------------------------------------------------------- pulse */
-// Each committed state gets one ~pulse row: {step, at, debounce_ms}. Step counts commits, not keystrokes.
+// Each committed state gets one ~pulse row: {step, at, debounce_ms, parent}. Step counts commits, not keystrokes.
+// parent is the identity of the previous committed state (null for the first), so pulses form a chain.
 const DEBOUNCE_MS = 300;
-function withPulse(tree, step, at, debounce) {
+function withPulse(tree, step, at, debounce, parent) {
   const meta = tree.parsed.meta.filter(m => m[0] !== 'pulse');
-  meta.unshift(['pulse', [{step, at: at || new Date().toISOString(), debounce_ms: debounce || DEBOUNCE_MS}]]);
+  meta.unshift(['pulse', [{step, at: at || new Date().toISOString(), debounce_ms: debounce || DEBOUNCE_MS, parent: parent || null}]]);
   const t = Object.assign({}, tree, {parsed: Object.assign({}, tree.parsed, {meta})});
   return serialize(t).uri;
 }

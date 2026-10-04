@@ -20,6 +20,7 @@
 4. **Type inference for variables.** A typing relation on trees, and a proof that a variable compared with a typed reference receives that type (what the workbench shows as "type from enrolled_on").
 5. **SQL semantics.** Give a formal semantics for the v0.1 SQL subset (selection, projection, joins with NULL padding, grouping, three-valued logic, ordering). Then prove that the tree evaluator and the SQL fiber's meaning agree. Existing work to build on: formal SQL semantics in Coq (for example HoTTSQL and SQLCert). Today this is tested, not proved: 49 fixed cases and 1,918 generated cases against PostgreSQL 18.3.
 6. **Rules about rules.** State the protocol's invariants (meta last, gaps block, identity ignores meta) as properties of *any* handler. A new profile then only has to prove its own round-trip and strictness lemmas to inherit them all.
+7. **Parent chain.** Model a pulse row as a structure with `step`, `at`, `debounce_ms` and `parent : Option String`, and a commit function that stamps each new address with the identity of the last committed one. Prove that in every chain it produces, the first pulse has `parent = none` and every other pulse's parent equals the identity of an earlier pulse (in fact the one immediately before it). `identity_withPulse` already covers the rest: the model treats the pulse as an opaque value, so adding `parent` cannot change identity. Today the chain property is tested in the workbench's test suite, not proved.
 
 ## How to keep the code and the proofs in sync
 
