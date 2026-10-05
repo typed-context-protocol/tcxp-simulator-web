@@ -68,6 +68,7 @@ h2 { font-size: 15px; font-weight: 600; margin: 0; }
 .fl textarea, .fl input, .fl select { border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 8px; background: var(--panel); font-size: 13px; color: var(--ink); resize: vertical; }
 .row2 { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 8px; }
 .fl input, .fl select, .fl textarea { width: 100%; min-width: 0; }
+.fl .mode { align-self: flex-start; font: 600 12px var(--font-code, monospace); color: var(--halt); background: var(--halt-bg); border-radius: 6px; padding: 6px 10px; }
 .review { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--ink-3); }
 .rv { border: 1px solid var(--line-2); background: var(--panel); border-radius: 999px; padding: 2px 9px; font-size: 12px; color: var(--ink-2); }
 .rv.on.pass { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
@@ -232,7 +233,7 @@ Divya Rao,2025-09-22,6,IN,P-DELTA`;
 const state = {
   csv: null, fileName: 'client_hours.csv',
   question: '', binds: {},
-  rules: [{id: 'r1', text: 'Before submitting, the user must state the tax year they are referencing.', require: 'tax_year', triggers: 'tax year|tax period|for|in|during', if_empty: 'ASK', review: null}],
+  rules: [{id: 'r1', text: 'Before submitting, the user must state the tax year they are referencing.', require: 'tax_year', triggers: 'tax year|tax period|for|in|during', if_empty: 'HALT', review: null}],
   uri: '', tree: null, pulses: [], step: 0, addressBar: false
 };
 
@@ -328,19 +329,21 @@ function buildAddress() {
 }
 
 /* --------------------------------------------------------- evaluate the rules */
-// A requirement is met only when its variable is bound in the address. Unmet + ASK or BLOCK = halt.
+// A requirement is met only when its variable is bound in the address. An unmet requirement halts (v0.2: HALT is the
+// only protocol mode). Asking the user for the value is this app's handler for a halt, not a protocol mode.
 function evaluate(tree) {
   const reqs = state.rules.map(r => {
     const bound = r.require in tree.parsed.bindings;
     const inTree = tree.slots.includes(r.require);
     return {rule: r, met: bound, inTree, sensed: state.binds[r.require] !== undefined ? state.sensed[r.require] : null};
   });
-  const unmet = reqs.filter(x => !x.met && x.rule.if_empty !== 'WARN');
-  const warn = reqs.filter(x => !x.met && x.rule.if_empty === 'WARN');
-  const halted = unmet.length > 0 || tree.gaps.length > 0;
+  const unmet = reqs.filter(x => !x.met);
   let result = null, err = null;
-  if (!halted) { try { result = T.execute(tree); } catch (e) { err = e.message; } }
-  return {reqs, unmet, warn, halted, result, err};
+  try { result = T.execute(tree); } catch (e) { err = e.message; }
+  // The engine is the authority: an unmet requirement or any gap comes back as kind "halt".
+  const halted = unmet.length > 0 || tree.gaps.length > 0 || (result && result.kind === 'halt');
+  if (halted) result = null;
+  return {reqs, unmet, halted, result, err};
 }
 
 /* ------------------------------------------------------------------ the loop */
@@ -366,12 +369,12 @@ function say(role, html) {
 }
 function fmt(v) { return typeof v === 'number' ? (Math.round(v * 100) / 100).toLocaleString() : esc(v); }
 // The application's handler. The protocol only says "halted, and why"; what to do about it is up to the app.
+// This app's handler for a halt is to ask the user in the chat.
 function respond(ev) {
   if (!ev) return;
   if (ev.halted) {
     const r = ev.unmet[0] ? ev.unmet[0].rule : null;
-    if (r && r.if_empty === 'BLOCK') say('bot', `<b>Blocked.</b> ${esc(r.text)} <span class="tag halt">halted</span>`);
-    else if (r) say('bot', `I can't run this yet. ${esc(r.text)} <b>${r.require === 'tax_year' ? 'Which tax year is this for?' : 'What is the ' + esc(r.require.replace(/_/g, ' ')) + '?'}</b> <span class="tag halt">halted</span>`);
+    if (r) say('bot', `I can't run this yet. ${esc(r.text)} <b>${r.require === 'tax_year' ? 'Which tax year is this for?' : 'What is the ' + esc(r.require.replace(/_/g, ' ')) + '?'}</b> <span class="tag halt">halted</span>`);
     else say('bot', `This can't run while <code>$${esc(ev.reqs.length ? '' : '')}${esc(state.tree.gaps.join(', $'))}</code> is missing. <span class="tag halt">halted</span>`);
     return;
   }
@@ -380,8 +383,7 @@ function respond(ev) {
   const ty = state.binds.tax_year ? ' in tax year ' + esc(state.binds.tax_year) : '';
   const us = /eq\(work_country,'US'\)/.test(state.uri) ? 'worked in the US' : 'worked';
   const label = res.columns[0] === 'total_hours' ? `Hours ${us}${ty}: <b>${fmt(v)}</b>` : `Matching rows${ty}: <b>${fmt(v)}</b>`;
-  const w = ev.warn.length ? `<br><span class="note">Warning: ${esc(ev.warn.map(x => x.rule.text).join(' '))}</span>` : '';
-  say('bot', `${label} <span class="tag ok">ran</span><br><span class="note">From ${esc(state.fileName)} (${state.csv.rows} rows).</span>${w}`);
+  say('bot', `${label} <span class="tag ok">ran</span><br><span class="note">From ${esc(state.fileName)} (${state.csv.rows} rows).</span>`);
 }
 function onUserMessage(text) {
   say('user', esc(text));
@@ -404,13 +406,13 @@ function renderRules() {
     const q = ev && ev.reqs.find(x => x.rule.id === r.id);
     const status = !ev ? '<span class="tag mute">waiting for a question</span>'
       : q.met ? `<span class="tag ok">met</span> <span class="note">sensed “${esc(state.sensed[r.require] || state.binds[r.require])}”</span>`
-      : r.if_empty === 'WARN' ? '<span class="tag warnt">not met · warn only</span>' : '<span class="tag halt">not met · halts</span>';
+      : '<span class="tag halt">not met · halts</span>';
     return `<div class="rule" data-i="${i}">
       <div class="rule-top"><span class="rid">${esc(r.id)}</span>${status}<button class="x" data-act="del" aria-label="Remove rule ${esc(r.id)}">×</button></div>
       <label class="fl">Requirement, in plain language<textarea data-f="text" rows="2" id="rule-text-${i}">${esc(r.text)}</textarea></label>
       <div class="row2">
         <label class="fl">Variable<input data-f="require" id="rule-var-${i}" value="${esc(r.require)}"></label>
-        <label class="fl">If missing<select data-f="if_empty" id="rule-mode-${i}">${['ASK', 'BLOCK', 'WARN'].map(m => `<option${m === r.if_empty ? ' selected' : ''}>${m}</option>`).join('')}</select></label>
+        <div class="fl">If missing<span class="mode" id="rule-mode-${i}">HALT</span></div>
       </div>
       <label class="fl">Trigger words (separated by |)<input data-f="triggers" id="rule-trig-${i}" value="${esc(r.triggers)}"></label>
       <div class="review"><span>Your check:</span>
@@ -486,7 +488,6 @@ function init() {
     clearTimeout(state.ruleTimer);
     state.ruleTimer = setTimeout(() => { if (state.question) commit('rule edited'); }, 300);
   });
-  $('#rules').addEventListener('change', e => { if (e.target.tagName === 'SELECT' && state.question) commit('rule edited'); });
   $('#rules').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     const i = +b.closest('.rule').dataset.i; const r = state.rules[i];
@@ -495,7 +496,7 @@ function init() {
   });
   $('#add-rule').addEventListener('click', () => {
     const n = state.rules.length + 1;
-    state.rules.push({id: 'r' + (n + Math.floor(Math.random() * 90)), text: 'Before submitting, the user must name the client.', require: 'client_name', triggers: 'client|for client', if_empty: 'ASK', review: null});
+    state.rules.push({id: 'r' + (n + Math.floor(Math.random() * 90)), text: 'Before submitting, the user must name the client.', require: 'client_name', triggers: 'client|for client', if_empty: 'HALT', review: null});
     commit('rule added') || renderAll(state.lastEval);
   });
   $('#pulses').addEventListener('click', e => { const li = e.target.closest('li[data-step]'); if (!li) return; const p = state.pulses.find(x => x.step === +li.dataset.step); if (p) { $('#pulse-uri').textContent = p.uri; $('#pulse-uri').hidden = false; } });

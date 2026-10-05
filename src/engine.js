@@ -383,10 +383,10 @@ function buildTree(parsed) {
   // one the query never uses. Such a variable gets its own slot beside the query tree (tree.intentSlots).
   const intentMeta = parsed.meta.find(m => m[0] === 'intent');
   const required = readIntent(intentMeta ? intentMeta[1] : undefined, diagnostics);
-  const modeOf = dict();
-  required.forEach(r => { if (!modeOf[r.name] || MODE_RANK[r.mode] > MODE_RANK[modeOf[r.name].mode]) modeOf[r.name] = r; });
+  const requiredBy = dict();
+  required.forEach(r => { (requiredBy[r.name] = requiredBy[r.name] || []).push(r); });
   const intentSlots = [];
-  Object.keys(modeOf).forEach(name => {
+  Object.keys(requiredBy).forEach(name => {
     if (slotsSeen.includes(name)) return;
     intentSlots.push({kind:'slot', name, children:[], requiredBy: required.filter(r => r.name === name).map(r => r.row)});
     slotsSeen.push(name);
@@ -396,17 +396,8 @@ function buildTree(parsed) {
   const allSlots = [];
   (function collect(n) { if (n.kind === 'slot' && !n.param) allSlots.push(n); (n.children || []).forEach(collect); })(root);
   intentSlots.forEach(s => allSlots.push(s));
-  const defaults = [], warnings = [];
   allSlots.forEach(s => {
     const b = bindings[s.name];
-    const rule = modeOf[s.name];
-    if (!b && rule && rule.mode === 'DEFAULT') {
-      // DEFAULT binds the row's default. It is never written into the address (identity is unchanged) and never silent.
-      s.children = [{kind:'value', value: rule.default, type: rule.defaultType, bound:true, defaulted:true}];
-      if (!defaults.some(d => d.var === s.name)) defaults.push({var: s.name, value: rule.default, row: rule.row, role: rule.role, text: rule.text});
-      return;
-    }
-    if (!b && rule && rule.mode === 'WARN' && intentSlots.includes(s)) { s.advisory = true; if (!warnings.some(w => w.var === s.name)) warnings.push({var: s.name, row: rule.row, role: rule.role, text: rule.text}); return; }
     if (!b) return;
     if (b.kind === 'call') {
       const inner = b.tree;
@@ -422,14 +413,13 @@ function buildTree(parsed) {
   });
   slotsSeen.forEach(name => {
     if (bindings[name]) return;
-    const rule = modeOf[name];
-    if (rule && rule.mode === 'DEFAULT') { diagnostics.push({level:'info', msg:'$' + name + ' is not bound, so intent row ' + (rule.row + 1) + ' defaults it to ' + JSON.stringify(rule.default)}); return; }
-    if (rule && rule.mode === 'WARN' && intentSlots.some(x => x.name === name)) { diagnostics.push({level:'warn', msg:'$' + name + ' is not bound. Intent row ' + (rule.row + 1) + ' only warns: ' + rule.text}); return; }
-    diagnostics.push({level:'gap', msg: rule ? '$' + name + ' is a gap: intent row ' + (rule.row + 1) + (rule.role ? ' (' + rule.role + ')' : '') + ' requires it (' + rule.mode + '). ' + rule.text : '$' + name + ' is a gap: no value is bound, so this cannot run'});
+    const rows = requiredBy[name];
+    diagnostics.push({level:'gap', msg: rows ? '$' + name + ' is a gap: ' + rows.map(r => 'intent row ' + (r.row + 1) + (r.role ? ' (' + r.role + ')' : '')).join(' and ') + ' require' + (rows.length === 1 ? 's' : '') + ' it, so this halts. ' + rows[0].text
+      : '$' + name + ' is a gap: no value is bound, so this cannot run'});
   });
   Object.keys(bindings).forEach(k => { if (!slotsSeen.includes(k)) diagnostics.push({level:'warn', msg:'$' + k + ' is bound but never used'}); });
 
-  const tree = {root, parsed, slots: slotsSeen, diagnostics, intentSlots, required, defaults, warnings};
+  const tree = {root, parsed, slots: slotsSeen, diagnostics, intentSlots, required};
   tree.gaps = gapsOf(tree);
   tree.spikes = readSpikes(tree);
   tree.spikes.forEach(sp => sp.problems.forEach(msg => diagnostics.push({level:'warn', msg:'Annotation ' + sp.id + ': ' + msg})));
@@ -466,13 +456,14 @@ function makeWalker(resolveRef, aliases, slotsSeen) {
 
 function gapsOf(tree) {
   const out = [];
-  const walk = n => { if (n.kind === 'slot' && !n.children.length && !n.advisory && !out.includes(n.name)) out.push(n.name); (n.children || []).forEach(walk); };
+  const walk = n => { if (n.kind === 'slot' && !n.children.length && !out.includes(n.name)) out.push(n.name); (n.children || []).forEach(walk); };
   walk(tree.root); (tree.intentSlots || []).forEach(walk);
   return out;
 }
 // ~intent: a string (legacy: one user row, no requirements) or an array of flat rows
-// {role, text, require: "$v" | ["$a","$b"], if_empty: "ASK" | "BLOCK" | "DEFAULT" | "WARN", default}.
-const MODE_RANK = {WARN: 0, DEFAULT: 1, ASK: 2, BLOCK: 3};
+// {role, text, require: "$v" | ["$a","$b"], if_empty: "HALT"}. The protocol has three states, HALT, ASK and ACT;
+// v0.2 implements HALT only. ASK and ACT are reserved: writing one is an error, never a silent HALT.
+const IF_EMPTY_RESERVED = ['ASK', 'ACT'];
 function readIntent(v, diagnostics) {
   if (v === undefined || typeof v === 'string' || typeof v === 'number') return [];
   const rows = Array.isArray(v) ? v : [v];
@@ -482,17 +473,12 @@ function readIntent(v, diagnostics) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) { bad('each row is a JSON object like {"role":"user","text":"…"}'); return; }
     if (row.require === undefined || row.require === null) { if (row.if_empty !== undefined) bad('if_empty needs require'); return; }
     const names = Array.isArray(row.require) ? row.require : [row.require];
-    const mode = row.if_empty === undefined ? 'BLOCK' : row.if_empty;
-    if (!Object.hasOwn(MODE_RANK, mode)) { bad('if_empty must be ASK, BLOCK, DEFAULT or WARN, not ' + JSON.stringify(mode)); return; }
-    let defaultType = null;
-    if (mode === 'DEFAULT') {
-      const d = row.default;
-      if (d === undefined || d === null || (typeof d !== 'number' && typeof d !== 'string' && typeof d !== 'boolean')) { bad('if_empty DEFAULT needs a default: a number, text or true/false'); return; }
-      defaultType = typeof d === 'number' ? (Number.isInteger(d) ? 'integer' : 'numeric') : typeof d === 'boolean' ? 'boolean' : 'text';
-    }
+    const mode = row.if_empty === undefined ? 'HALT' : row.if_empty;
+    if (IF_EMPTY_RESERVED.includes(mode)) { bad(mode + ' is reserved for a future version; v0.2 supports HALT only'); return; }
+    if (mode !== 'HALT') { bad('if_empty must be "HALT" (or omitted, which means HALT), not ' + JSON.stringify(mode)); return; }
     names.forEach(n => {
       if (typeof n !== 'string' || !/^\$[A-Za-z_][A-Za-z0-9_]*$/.test(n)) { bad('require names variables like "$tax_year", not ' + JSON.stringify(n)); return; }
-      out.push({name: n.slice(1), row: i, mode, role: typeof row.role === 'string' ? row.role : null, text: typeof row.text === 'string' ? row.text : '', default: row.default, defaultType});
+      out.push({name: n.slice(1), row: i, mode, role: typeof row.role === 'string' ? row.role : null, text: typeof row.text === 'string' ? row.text : ''});
     });
   });
   return out;
@@ -631,7 +617,7 @@ const identity = tree => serialize(tree, {meta:false}).uri;
 // Intent rows never change identity, but they can decide whether a state runs (ask, gap, default). A stored
 // result is therefore keyed by the identity plus what the intent rows require; with no requirements it is the identity.
 const resultKey = tree => !tree.required || !tree.required.length ? identity(tree)
-  : identity(tree) + ' ~requires ' + JSON.stringify(tree.required.map(r => [r.name, r.mode, r.mode === 'DEFAULT' ? r.default : null]).sort());
+  : identity(tree) + ' ~requires ' + JSON.stringify([...new Set(tree.required.map(r => r.name))].sort());
 // Strict transport form: every character outside RFC 3986 unreserved/sub-delims is percent-encoded.
 function strictForm(uri) {
   return uri.replace(/[^A-Za-z0-9\-._~!$&'()*+,;=:@\/?%]/g, c => encodeURIComponent(c)).replace(/%(?![0-9A-Fa-f]{2})/g, '%25');
@@ -650,7 +636,6 @@ function boundValues(tree) {
     if (b.kind === 'call') { vals[k] = invoke(b.tree); via[k] = 'call'; }
     else { vals[k] = b.value; via[k] = 'literal'; }
   });
-  (tree.defaults || []).forEach(d => { vals[d.var] = d.value; via[d.var] = 'default'; });
   return {vals, via};
 }
 
@@ -764,7 +749,7 @@ function toJSON(tree) {
     if (n.kind === 'operator') { o.op = n.op; }
     if (n.kind === 'reference') { o.name = n.name; if (n.role) o.role = n.role; }
     if (n.kind === 'slot') { o.name = n.name; if (!n.children.length) o.gap = true; }
-    if (n.kind === 'value') { o.value = n.value; if (n.defaulted) o.default = true; }
+    if (n.kind === 'value') { o.value = n.value; }
     if (n.type) o.type = baseType(n.type);
     if (n.children && n.children.length) o.children = n.children.map(clean);
     return o;
@@ -791,21 +776,13 @@ function execute(tree, opts) {
   if (err) throw new TcxpError(err.msg, null, err.code);
   const p = tree.parsed;
   if (tree.gaps.length) {
-    // An intent row decides how a missing variable halts: ASK asks its question, BLOCK (or no row) is a gap.
-    const rule = name => (tree.required || []).filter(r => r.name === name).sort((a, b) => MODE_RANK[b.mode] - MODE_RANK[a.mode])[0];
-    const modes = tree.gaps.map(rule);
-    const asks = modes.filter(r => r && r.mode === 'ASK');
-    if (asks.length && !modes.some(r => r && r.mode === 'BLOCK'))
-      return {kind:'ask', question: asks[0].text, questions: asks.map(r => ({var: r.name, text: r.text, role: r.role, row: r.row})), gaps: tree.gaps};
-    return {kind:'gap', gaps: tree.gaps};
+    // A gap always halts: a variable in the query, or one an intent row requires, has no value. Nothing runs or writes.
+    const res = {kind:'halt', gaps: tree.gaps};
+    const rows = (tree.required || []).filter(r => tree.gaps.includes(r.name));
+    if (rows.length) res.requiredBy = rows.map(r => ({var: r.name, row: r.row, role: r.role, text: r.text}));
+    return res;
   }
-  return withIntentNotes(tree, executeReady(tree, opts));
-}
-// Defaults and warnings travel with the result: a default is never applied silently.
-function withIntentNotes(tree, res) {
-  if (tree.defaults && tree.defaults.length) res.defaults = tree.defaults.map(d => ({var: d.var, value: d.value, row: d.row}));
-  if (tree.warnings && tree.warnings.length) res.warnings = tree.warnings.map(w => ({var: w.var, text: w.text, row: w.row}));
-  return res;
+  return executeReady(tree, opts);
 }
 function executeReady(tree, opts) {
   const p = tree.parsed;
@@ -1376,28 +1353,6 @@ function edit(uri, ops, opts) {
   return {uri: cur, tree};
 }
 
-// recordDefaults: when intent rows default a variable, write that down. Adds one annotation per default
-// (id "default-<var>", on /$var) and, unless opts.pulse === false, a ~pulse whose row lists the defaults.
-// Meta only, so the identity is unchanged.
-function recordDefaults(uri, opts) {
-  opts = opts || {};
-  let tree = parseURI(uri);
-  const defaults = tree.defaults.map(d => ({var: d.var, value: d.value, row: d.row}));
-  if (!defaults.length) return {uri: serialize(tree).uri, tree, defaults};
-  const before = identity(tree);
-  const have = new Set(tree.spikes.map(sp => sp.id));
-  const ops = tree.defaults.filter(d => !have.has('default-' + d.var)).map(d => ({op: 'annotate', id: 'default-' + d.var, on: ['/$' + d.var],
-    meaning: '$' + d.var + ' was not given. Intent row ' + (d.row + 1) + (d.role ? ' (' + d.role + ')' : '') + ' defaulted it to ' + JSON.stringify(d.value) + '.', structure: null, environment: null}));
-  let cur = ops.length ? edit(uri, ops, {pulse: false}).uri : serialize(tree).uri;
-  if (opts.pulse !== false) {
-    const t = parseURI(cur); const prev = t.parsed.meta.find(m => m[0] === 'pulse');
-    const step = prev && Array.isArray(prev[1]) && prev[1][0] && Number.isInteger(prev[1][0].step) ? prev[1][0].step + 1 : 1;
-    cur = withPulse(t, step, opts.at, 0, before, {defaults});
-  }
-  tree = parseURI(cur);
-  return {uri: cur, tree, defaults};
-}
-
 // query(uri, selector) -> [{pointer, kind, label}]. Every pointer resolves with resolvePointer.
 function nodeLabel(n) {
   if (n.kind === 'operator') return n.op;
@@ -1437,7 +1392,7 @@ function fromJSON(j) {
   const jt = n => n.kind === 'value' ? exprValText(n) : n.kind === 'slot' ? '$' + n.name : n.kind === 'reference' ? n.name : n.op + '(' + (n.children || []).map(jt).join(',') + ')';
   const callText = c => { const [h, ...params] = c.children; return CALL + SCHEME + h.name + (params.filter(p => p.children).length ? '?' + params.filter(p => p.children).map(p => p.name + '=' + encLiteral(String(p.children[0].value))).join('&') : ''); };
   (function collect(n) {
-    if (n.kind === 'slot' && !n.param && n.children && !n.children[0].default && !seen.has(n.name)) {
+    if (n.kind === 'slot' && !n.param && n.children && !seen.has(n.name)) {
       seen.add(n.name); const b = n.children[0];
       binds.push('$' + n.name + '=' + (b.kind === 'operator' && b.op === 'call' ? callText(b).replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23') : jt(b)));
       return;

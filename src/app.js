@@ -101,10 +101,6 @@ function update(uri) {
   const diags = tree.diagnostics.slice();
   if (ser.uri !== state.uri) diags.push({level: 'info', msg: 'Canonical form differs from what was typed (spacing, key order or encoding). The colored line is the canonical form.'});
   $('#diags').innerHTML = diags.map(d => `<li class="diag ${d.level}">${esc(d.msg)}</li>`).join('');
-  // A default from an intent row is never silent: write its annotation into the address once (meta only).
-  if (tree.defaults && tree.defaults.length && tree.defaults.some(d => !tree.spikes.some(sp => sp.id === 'default-' + d.var))) {
-    try { const rec = T.recordDefaults(state.uri, {pulse: false}); $('#uri-input').value = rec.uri; update(rec.uri); return; } catch (e) {}
-  }
   renderTree(tree);
   renderFind();
   renderResult(tree);
@@ -134,10 +130,8 @@ function nodeText(n) {
   }
   if (n.kind === 'slot') {
     const t = n.type ? T.baseType(n.type) : 'untyped';
-    if (n.advisory) return ['$' + n.name, 'warn only · not bound'];
-    return [(n.param ? '' : '$') + n.name, n.children.length ? (n.children[0].defaulted ? 'default · ' + t : t) : 'gap · ' + t];
+    return [(n.param ? '' : '$') + n.name, n.children.length ? t : 'gap · ' + t];
   }
-  if (n.kind === 'value' && n.defaulted) return [String(n.value), 'default from ~intent'];
   if (n.kind === 'value') return [n.value === null ? 'null' : n.type === 'text' ? `'${n.value}'` : String(n.value), n.type];
   return ['?', ''];
 }
@@ -183,7 +177,7 @@ function renderTree(tree) {
   }).join('');
   const nd = nodes.map(n => {
     const x = n._x - n._w / 2, y = n._y, [a, b] = n._t, k = nodeKind(n);
-    const title = k === 'gap' ? 'Gap: variable with no value. Execution is blocked until it is bound.'
+    const title = k === 'gap' ? 'Gap: variable with no value. The address halts until it is bound.'
       : k === 'variable' ? 'Variable' + (n.typedBy ? ', type from ' + n.typedBy : '')
       : k === 'reference' ? 'Reference' + (n.role ? ' (' + n.role + ')' : '') : k === 'operator' ? 'Operator' : 'Value';
     const ann = annotated.get(n);
@@ -242,9 +236,8 @@ function snapshotCheck(tree, res) {
     return res.count === s.count && JSON.stringify(res.returning.columns) === JSON.stringify(s.columns) && unordered(res.returning.rows.map(r => r.map(norm))) === unordered(s.rows);
   }
   if (res.kind === 'error') return s.kind === 'error' && s.code === res.code;
-  if (res.kind === 'ask') return s.kind === 'ask' && s.question === res.question && JSON.stringify(s.gaps) === JSON.stringify(res.gaps);
   if (s.kind !== res.kind) return false;
-  if (s.kind === 'gap') return JSON.stringify(s.gaps) === JSON.stringify(res.gaps);
+  if (s.kind === 'halt') return JSON.stringify(s.gaps) === JSON.stringify(res.gaps);
   if (s.kind === 'value') return norm(res.value) === s.value;
   if (s.kind === 'call') return res.value === s.value;
   const a = res.rows.map(r => r.map(norm));
@@ -276,17 +269,20 @@ function literalFor(raw, type) {
   if (v.startsWith('@!tcxp:/')) return v.replace(/%/g, '%25').replace(/&/g, '%26');
   return "'" + v.replace(/'/g, "''") + "'";
 }
-function gapPanel(tree) {
+// A halt: every missing variable, and for each one the intent rows that require it.
+function gapPanel(tree, res) {
+  const by = (res && res.requiredBy) || [];
   const rows = tree.gaps.map(name => {
     const slot = T.findSlot(tree.root, name) || (tree.parsed.items[name] && tree.parsed.items[name][0]);
     const type = slot && slot.type ? T.baseType(slot.type) : null;
     const notes = tree.spikes.filter(sp => sp.targets.some(t => t.nodes.includes(slot)))
       .flatMap(sp => ['environment', 'structure'].filter(f => sp.facets[f].lit).map(f => `<div class="env"><b>${esc(sp.id)} · ${f}:</b> ${esc(sp.facets[f].text)}</div>`)).join('');
     const isParam = slot && slot.param;
-    return `<div class="gaprow"><div><b><code>${isParam ? '' : '$'}${esc(name)}</code></b>${type ? ` expects <code>${esc(type)}</code>` : ''}. Nothing runs until it has a value.</div>${notes}
+    const reqs = by.filter(x => x.var === name).map(x => `<div class="env"><b>Required by intent row ${x.row + 1}${x.role ? ' (' + esc(x.role) + ')' : ''}:</b> ${esc(x.text)}</div>`).join('');
+    return `<div class="gaprow"><div><b><code>${isParam ? '' : '$'}${esc(name)}</code></b>${type ? ` expects <code>${esc(type)}</code>` : ''}. Nothing runs until it has a value.</div>${reqs}${notes}
       <form data-gap="${esc(name)}" data-type="${esc(type || '')}" data-param="${isParam ? 1 : 0}"><input id="gap-${esc(name)}" placeholder="Value for ${isParam ? '' : '$'}${esc(name)}" aria-label="Value for ${esc(name)}"><button class="btn small" type="submit">Bind</button></form></div>`;
   }).join('');
-  return `<div class="gapbox"><h3>Blocked by ${tree.gaps.length} gap${tree.gaps.length === 1 ? '' : 's'}</h3>${rows}</div>`;
+  return `<div class="gapbox"><h3>HALT · ${tree.gaps.length} gap${tree.gaps.length === 1 ? '' : 's'}</h3>${rows}</div>`;
 }
 function renderResult(tree) {
   const card = $('#result-card'); const title = $('#result-title');
@@ -298,13 +294,9 @@ function renderResult(tree) {
   try { res = T.execute(tree); } catch (e) { title.textContent = 'Result'; card.innerHTML = `<div class="err-box">${esc(e.message)}</div>`; return; }
   state.result = res;
   const mode = tree.parsed.mode;
-  if (res.kind === 'ask') {
-    title.textContent = 'Asked before running';
-    card.innerHTML = `<div class="askbox"><div class="q">${esc(res.question)}</div><div class="who">${res.questions.map(x => `Intent row ${x.row + 1}${x.role ? ' (' + esc(x.role) + ')' : ''} requires <code>$${esc(x.var)}</code>`).join(' · ')}. Nothing runs until it is answered.</div></div>` +
-      gapPanel(tree) + `<div class="status-line">${badge(tree, res)}</div>`;
-  } else if (res.kind === 'gap') {
-    title.textContent = mode === 'math' ? 'Decide (if)' : 'Result';
-    card.innerHTML = (mode === 'math' ? decidePanel(tree, null) : '') + gapPanel(tree) + `<div class="status-line">${badge(tree, res)}</div>`;
+  if (res.kind === 'halt') {
+    title.textContent = mode === 'math' ? 'Decide (if)' : 'Halted';
+    card.innerHTML = (mode === 'math' ? decidePanel(tree, null) : '') + gapPanel(tree, res) + `<div class="status-line"><span>A gap always halts. Nothing runs or writes until every required variable is bound.</span>${badge(tree, res)}</div>`;
   } else if (res.kind === 'value') {
     title.textContent = res.decision === null ? 'Value' : 'Decide (if)';
     card.innerHTML = (res.decision === null ? `<div class="returned"><span class="big">${esc(res.value)}</span></div>` : decidePanel(tree, res.decision)) + `<div class="status-line"><span>Computed in this page by evaluating the tree</span>${badge(tree, res)}</div>`;
@@ -322,7 +314,6 @@ function renderResult(tree) {
     title.textContent = 'Result';
     card.innerHTML = resultTable(res.columns, res.rows) + `<div class="status-line"><span>${res.rows.length} row${res.rows.length === 1 ? '' : 's'}, computed in this page by evaluating the tree</span>${badge(tree, res)}</div>`;
   }
-  if (res.defaults || res.warnings) card.insertAdjacentHTML('afterbegin', intentNotes(res));
   card.querySelectorAll('form[data-gap]').forEach(f => f.addEventListener('submit', ev => {
     ev.preventDefault();
     const input = f.querySelector('input'); if (!input.value.trim()) { input.focus(); return; }
@@ -368,9 +359,9 @@ function renderWrite(tree, card, title) {
   if (err) {
     title.textContent = 'Write would fail';
     card.innerHTML = `<div class="err-box">${esc(err.message)}${err.code ? ` <code>${esc(err.code)}</code>` : ''}</div><div class="status-line"><span>Nothing was changed.</span>${badge(tree, {kind: 'error', code: err.code}, clean ? undefined : false)}${resetBtn}</div>`;
-  } else if (res.kind === 'gap') {
-    title.textContent = 'Write blocked';
-    card.innerHTML = gapPanel(tree) + `<div class="status-line"><span>Gaps block writes: no preview, and nothing runs, until every variable is bound.</span>${badge(tree, res)}</div>`;
+  } else if (res.kind === 'halt') {
+    title.textContent = 'Write halted';
+    card.innerHTML = gapPanel(tree, res) + `<div class="status-line"><span>A gap always halts: no preview, and nothing is written, until every required variable is bound.</span>${badge(tree, res)}</div>`;
   } else {
     const [done1, verb] = OPWORD[res.op];
     const ret = res.returning.columns.length ? `<div class="sub-h">RETURNING</div>` + resultTable(res.returning.columns, res.returning.rows) : '';
@@ -391,10 +382,6 @@ function renderWrite(tree, card, title) {
     else if (act === 'undo') { res.inverse.forEach(u => T.execute(T.parseURI(u))); state.lastWrite = null; refreshCounts(); loadURI(plainOf(tree)); }
     else if (act === 'reset') { T.resetData(); state.lastWrite = null; refreshCounts(); update(state.uri); }
   }));
-}
-function intentNotes(res) {
-  return (res.defaults || []).map(d => `<div class="write-note">Defaulted: <code>$${esc(d.var)}</code> was not given, so intent row ${d.row + 1} used <b>${esc(JSON.stringify(d.value))}</b>. This is recorded as an annotation and in the pulse.</div>`).join('') +
-    (res.warnings || []).map(w => `<div class="write-note">Warning from intent row ${w.row + 1}: <code>$${esc(w.var)}</code> is not bound. ${esc(w.text)}</div>`).join('');
 }
 function decidePanel(tree, decision) {
   const q = T.toMath(tree, true);
@@ -478,11 +465,10 @@ function commitPulse(tree) {
   const at = new Date().toISOString();
   const parent = last ? last.identity : null;
   const id = T.identity(tree);
-  const wrote = Object.assign({}, state.lastWrite && state.lastWrite.identity === id ? {undo: state.lastWrite.res.inverse} : {},
-    tree.defaults && tree.defaults.length ? {defaults: tree.defaults.map(d => ({var: d.var, value: d.value, row: d.row}))} : {});
+  const wrote = state.lastWrite && state.lastWrite.identity === id ? {undo: state.lastWrite.res.inverse} : {};
   const extra = Object.keys(wrote).length ? wrote : null;
   const uri = T.withPulse(tree, state.step, at, T.DEBOUNCE_MS, parent, extra);
-  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, undo: wrote.undo || null, defaults: wrote.defaults || null, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: intentLabel(tree) || tree.parsed.registry + '/' + tree.parsed.path});
+  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, undo: wrote.undo || null, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: intentLabel(tree) || tree.parsed.registry + '/' + tree.parsed.path});
   renderPulses(); syncAddressBar();
 }
 function renderPulses() {
@@ -541,13 +527,13 @@ function runTests() {
       let r;
       try { r = T.execute(tree, {store: T.newStore()}); }
       catch (e) { if (!e.code) throw e; r = {kind: 'error', code: e.code}; }
-      kind = r.kind === 'error' ? 'error ' + r.code : r.kind === 'ask' ? 'ask: nothing runs' : r.kind;
+      kind = r.kind === 'error' ? 'error ' + r.code : r.kind;
       res = snapshotCheck(tree, r) === true;
     } catch (e) { note = e.message; }
     const all = parse && rt && strict && ref !== false && res; if (all) qPass++;
     return `<tr><td class="wrap"><button class="probe title" data-uri="${esc(q.uri)}">${esc(q.title)}</button>${note ? `<div class="diag error">${esc(note)}</div>` : ''}</td>
       <td>${parse ? Y : N}</td><td>${rt ? Y : N}</td><td>${strict ? Y : N}</td><td>${ref === null ? NA : ref ? Y : N}</td>
-      <td>${res ? Y : N} <span style="color:var(--ink-3);font-size:12px">${esc(kind === 'gap' ? 'gap blocks run' : kind)}</span></td></tr>`;
+      <td>${res ? Y : N} <span style="color:var(--ink-3);font-size:12px">${esc(kind === 'halt' ? 'halts: nothing runs' : kind)}</span></td></tr>`;
   }).join('');
   $('#test-queries').innerHTML = `<table class="grid"><thead><tr><th>Address</th><th>Parses</th><th>Round-trip</th><th>Strict form</th><th>SQL = reference</th><th>Result = verified</th></tr></thead><tbody>${qRows}</tbody></table>`;
 
@@ -571,9 +557,9 @@ function runTests() {
     inv.push(['Every parent is an earlier pulse', 'In a pulse chain, each parent equals the identity of an earlier pulse (the first has parent null)', pass, chain.length]); }
   check('Every pointer resolves', 'Each annotation pointer lands on at least one node', t => t.spikes.length ? t.spikes.every(sp => sp.data) : null);
   check('Every lit facet resolves', 'Facet addresses resolve to notes in a registry', t => t.spikes.length ? t.spikes.every(sp => !sp.problems.length) : null);
-  check('Gaps block execution', 'Any unbound variable makes execute() return a gap (or, when an intent row says ASK, an ask) and run nothing, writes included', t => { if (!t.gaps.length) return null; const st = T.newStore(); const k = T.execute(t, {store: st}).kind; return (k === 'gap' || k === 'ask') && !T.dataChanged(st); });
+  check('A gap always halts', 'A gap always halts. Nothing runs or writes until every required variable is bound.', t => { if (!t.gaps.length) return null; const st = T.newStore(); return T.execute(t, {store: st}).kind === 'halt' && !T.dataChanged(st); });
   check('Intent rows never change identity', 'Removing ~intent (string or rows) leaves the identity unchanged', t => { const m = t.parsed.meta.find(x => x[0] === 'intent'); if (!m) return null; return T.identity(T.edit(T.serialize(t).uri, [{op: 'meta', key: 'intent', value: null}], {pulse: false}).tree) === T.identity(t); });
-  check('Bound trees have no gaps', 'With every variable bound, execution produces a result or a plain-language refusal, never a gap', t => { if (t.gaps.length) return null; try { return T.execute(t, {store: T.newStore()}).kind !== 'gap'; } catch (e) { return !!e.code; } });
+  check('Bound trees have no gaps', 'With every variable bound, execution produces a result or a plain-language refusal, never a halt', t => { if (t.gaps.length) return null; try { return T.execute(t, {store: T.newStore()}).kind !== 'halt'; } catch (e) { return !!e.code; } });
   check('A preview never writes', 'Running a write address without @ changes no data', t => { if (t.parsed.mode !== 'write' || t.gaps.length) return null; const st = T.newStore(); try { T.execute(t, {store: st, preview: true}); } catch (e) { if (!e.code) return false; } return !T.dataChanged(st); });
   check('Inverse restores the data', 'Applying a write and then its inverse addresses leaves every table as it was', t => {
     if (t.parsed.mode !== 'write' || t.gaps.length || t.diagnostics.some(d => d.level === 'error' || d.level === 'refused')) return null;
@@ -617,13 +603,13 @@ function runGenerator() {
     if (!f.tree) return;
     try { if (T.serialize(T.parseURI(T.strictForm(u))).uri === u) strict++; } catch (e) {}
     if (f.tree.parsed.meta.length) { idMetaTotal++; try { if (T.identity(T.parseURI(T.withPulse(f.tree, 1, '2026-01-01T00:00:00.000Z', 300))) === T.identity(f.tree)) idMeta++; } catch (e) {} }
-    try { const r = T.execute(f.tree); kinds[r.kind] = (kinds[r.kind] || 0) + 1; if (f.tree.gaps.length) { gapsTotal++; if (r.kind === 'gap') gapsBlocked++; } } catch (e) { kinds.error = (kinds.error || 0) + 1; }
+    try { const r = T.execute(f.tree); kinds[r.kind] = (kinds[r.kind] || 0) + 1; if (f.tree.gaps.length) { gapsTotal++; if (r.kind === 'halt') gapsBlocked++; } } catch (e) { kinds.error = (kinds.error || 0) + 1; }
   });
   const pill = (a, b) => a === b ? `<span class="pill ok">✓ ${a} / ${b}</span>` : `<span class="pill bad">✗ ${a} / ${b}</span>`;
   const rows = T.RULES.map(([id, name]) => `<tr><td>Rule: ${esc(name)}</td><td>${pill(tally[id], n)}</td></tr>`).join('') +
     `<tr><td>Strict percent-encoded form parses back to the same address</td><td>${pill(strict, n)}</td></tr>
      <tr><td>Identity ignores ~meta (addresses that carry meta)</td><td>${pill(idMeta, idMetaTotal)}</td></tr>
-     <tr><td>Gaps block execution</td><td>${pill(gapsBlocked, gapsTotal)}</td></tr>
+     <tr><td>A gap always halts</td><td>${pill(gapsBlocked, gapsTotal)}</td></tr>
      <tr><td>Outcomes</td><td>${Object.entries(kinds).map(([k, v]) => `<span class="pill mute">${esc(k)} ${v}</span>`).join(' ')}</td></tr>`;
   const samples = uris.slice(0, 8).map(u => `<li style="margin:4px 0"><button class="probe" data-uri="${esc(u)}">${esc(u)}</button></li>`).join('');
   $('#test-generator').innerHTML = `<table class="grid"><thead><tr><th>Check over ${n} generated addresses (seed ${seed})</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table>
@@ -677,7 +663,7 @@ function init() {
   $('#reset-uri').addEventListener('click', () => selectQuery(state.queryId, {noScroll: true}));
   $('#copy-uri').addEventListener('click', e => copy(state.uri, e.currentTarget));
   $('#copy-fiber').addEventListener('click', e => { const f = state.fibers[state.fiber]; if (f) copy(f.text, e.currentTarget); });
-  $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify(Object.assign({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent}, p.undo ? {undo: p.undo} : {}, p.defaults ? {defaults: p.defaults} : {}, {identity: p.identity, uri: p.uri}))).join('\n'), e.currentTarget));
+  $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify(Object.assign({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent}, p.undo ? {undo: p.undo} : {}, {identity: p.identity, uri: p.uri}))).join('\n'), e.currentTarget));
   $('#fiber-tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (!b) return; state.fiber = b.dataset.f; $('#fiber-tabs').querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === b))); $('#fiber-body').innerHTML = state.fibers[state.fiber].html; });
   $('#pulses').addEventListener('click', e => { const li = e.target.closest('.pulse'); if (!li) return; const p = state.pulses.find(x => x.step === +li.dataset.step); if (p) loadURI(p.uri); });
   $('#find-form').addEventListener('submit', e => e.preventDefault());

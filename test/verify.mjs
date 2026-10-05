@@ -49,13 +49,9 @@ for (const c of cases) {
       writeCases++;
       const w = await checkWrite(c, tree); ok = ok && w.ok; detail = w.detail;
       if (c.ref) { const inl = T.toSQL(tree, {inline: true}).sql.replace(/\s+/g, ' '); if (inl !== c.ref) { ok = false; console.log('  inline:', inl, '\n  ref:   ', c.ref); } }
-    } else if (mem.kind === 'ask') {
-      // An intent row's ASK: nothing runs, the row's question comes back.
-      results[id] = {kind: 'ask', question: mem.question, gaps: mem.gaps};
-      detail = 'ask $' + mem.gaps.join(',$') + ': ' + mem.question.slice(0, 40) + '…';
-    } else if (mem.kind === 'gap') {
-      results[id] = {kind: 'gap', gaps: mem.gaps};
-      detail = 'gap ' + mem.gaps.join(',');
+    } else if (mem.kind === 'halt') {
+      results[id] = {kind: 'halt', gaps: mem.gaps};
+      detail = 'halt ' + mem.gaps.join(',') + (mem.requiredBy ? ' (required by ~intent)' : '');
     } else if (mode === 'sql' || mode === 'math') {
       const g = T.toSQL(tree);
       const db = mode === 'sql' ? dbs[tree.parsed.registry] : scratch;

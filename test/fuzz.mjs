@@ -27,7 +27,7 @@ for (let i = 0; i < N; i++) {
   tally.roundtrip++;
   if (T.serialize(T.parseURI(T.strictForm(uri))).uri === uri) tally.strict++; else { fail++; console.log('STRICT', uri); }
   const tree = f.tree; const mem = T.execute(tree);
-  if (mem.kind === 'gap') { tally.gaps++; continue; }
+  if (mem.kind === 'halt') { tally.gaps++; continue; }
   if (mem.kind === 'call') { tally.calls++; continue; }
   const g = T.toSQL(tree);
   const db = tree.parsed.mode === 'sql' ? dbs[tree.parsed.registry] : scratch;

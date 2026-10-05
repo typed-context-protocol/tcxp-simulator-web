@@ -34,11 +34,16 @@ if (at >= 0) {
   console.log('captured', STREAMS.length, 'stream hashes'); process.exit(0);
 }
 const base = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-let fail = 0;
+let fail = 0, renamed = 0;
 for (const b of base) {
   let now;
   try { now = describe(b.input); } catch (e) { fail++; console.log('ERR ', b.id, e.message); continue; }
-  const diffs = ['uri', 'identity', 'sql', 'result'].filter(k => JSON.stringify(now[k]) !== JSON.stringify(b[k]));
+  // The one documented v0.2 difference: a gap's result kind is renamed "gap" -> "halt" (same gaps list, nothing else).
+  // The baseline file stays frozen; the rename is applied here and counted.
+  let expected = b.result;
+  if (expected && expected.kind === 'gap') { expected = Object.assign({}, expected, {kind: 'halt'}); renamed++; }
+  const diffs = ['uri', 'identity', 'sql'].filter(k => JSON.stringify(now[k]) !== JSON.stringify(b[k]));
+  if (JSON.stringify(now.result) !== JSON.stringify(expected)) diffs.push('result');
   if (now.uri !== b.input) diffs.unshift('roundtrip');
   if (diffs.length) { fail++; console.log('FAIL', b.id, diffs.join(',')); }
 }
@@ -46,5 +51,5 @@ const streams = JSON.parse(fs.readFileSync(STREAM, 'utf8'));
 let streamFail = 0;
 for (const s of streams) if (streamHash(T, s.seed, s.n) !== s.sha256) { streamFail++; console.log('FAIL read stream seed', s.seed, 'n', s.n, 'changed'); }
 fail += streamFail;
-console.log(JSON.stringify({compat: base.length, identical: base.length - (fail - streamFail), streams: streams.length, streamsIdentical: streams.length - streamFail, failures: fail}));
+console.log(JSON.stringify({compat: base.length, identical: base.length - (fail - streamFail), gapRenamedToHalt: renamed, streams: streams.length, streamsIdentical: streams.length - streamFail, failures: fail}));
 process.exit(fail ? 1 : 0);

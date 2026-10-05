@@ -12,10 +12,7 @@ const run = t => { try { return T.execute(t, {store: T.newStore()}); } catch (e)
 const randomRows = () => {
   const rows = [{role: 'user', text: pick(['How many hours?', 'Is it safe & sound?', 'Q3 #2'])}];
   const n = Math.floor(rnd() * 3);
-  for (let i = 0; i < n; i++) {
-    const mode = pick(['ASK', 'BLOCK', 'DEFAULT', 'WARN']);
-    rows.push(Object.assign({role: pick(['manager', 'auditor']), text: 'Rule ' + i, require: pick(['$req_a', '$req_b', ['$req_a', '$req_c']]), if_empty: mode}, mode === 'DEFAULT' ? {default: pick([2024, 'x', 1.5])} : {}));
-  }
+  for (let i = 0; i < n; i++) rows.push(Object.assign({role: pick(['manager', 'auditor']), text: 'Rule ' + i, require: pick(['$req_a', '$req_b', ['$req_a', '$req_c']])}, rnd() < 0.5 ? {if_empty: 'HALT'} : {}));
   return rows;
 };
 
@@ -36,43 +33,54 @@ for (const uri of corpus) {
   const removed = T.edit(withRows.uri, [{op: 'meta', key: 'intent', value: null}], {pulse: false});
   tally('intent rows never change identity (remove)', T.identity(removed.tree) === id, removed.uri);
   tally('intent rows round-trip', T.serialize(T.parseURI(withRows.uri)).uri === withRows.uri && T.serialize(T.parseURI(T.strictForm(withRows.uri))).uri === withRows.uri, withRows.uri);
-  // required variables produce gaps; ASK/BLOCK halt (ask or gap) and nothing runs or writes
-  const req = T.edit(uri, [{op: 'meta', key: 'intent', value: [{role: 'manager', text: 'State the reason.', require: '$req_reason', if_empty: pick(['ASK', 'BLOCK'])}]}], {pulse: false}).tree;
+  // required variables produce gaps, and a gap always halts: nothing runs or writes
+  const req = T.edit(uri, [{op: 'meta', key: 'intent', value: [{role: 'manager', text: 'State the reason.', require: '$req_reason', ...(rnd() < 0.5 ? {if_empty: 'HALT'} : {})}]}], {pulse: false}).tree;
   tally('a required variable is a gap', req.gaps.includes('req_reason') && T.query(req, 'gaps').some(g => g.label === '$req_reason'), uri);
   tally('every gaps pointer resolves (intent slots too)', T.query(req, 'gaps').every(g => T.resolvePointer(req, g.pointer).length > 0), uri);
   const st = T.newStore(); let r; try { r = T.execute(req, {store: st}); } catch (e) { r = {kind: 'error', code: e.code}; }
-  const rule = req.required[0].mode;
-  tally('ASK returns ask, BLOCK returns gap, and nothing runs', (rule === 'ASK' ? (r.kind === 'ask' || (r.kind === 'gap' && req.gaps.length > 1)) : r.kind === 'gap') && !T.dataChanged(st) || r.kind === 'error', uri + ' ' + JSON.stringify(r));
-  if (r.kind === 'ask') tally('ask carries the row text as the question', r.question === 'State the reason.' || req.gaps.length > 1, uri);
+  // An address that is malformed or refused (an update/delete without where=) reports that first: binding the
+  // variable could never make it run. Either way nothing runs or writes.
+  const refusedFirst = req.diagnostics.some(d => d.level === 'error' || d.level === 'refused');
+  tally('A gap always halts. Nothing runs or writes until every required variable is bound.', (refusedFirst ? r.kind === 'error' : r.kind === 'halt') && !T.dataChanged(st), uri + ' ' + JSON.stringify(r));
+  if (!refusedFirst) tally('a halt lists the variables and the rows that require them', r.kind === 'halt' && r.gaps.includes('req_reason') && r.requiredBy.some(x => x.var === 'req_reason' && x.row === 0 && x.role === 'manager' && x.text === 'State the reason.'), uri + ' ' + JSON.stringify(r));
   // binding the required variable (bind is widened to intent-required variables) lifts the halt
   const bound = T.edit(T.serialize(req).uri, [{op: 'bind', var: 'req_reason', value: "'audit'"}], {pulse: false}).tree;
   tally('binding the required variable removes that gap', !bound.gaps.includes('req_reason') && T.identity(bound) !== T.identity(req), uri);
   tally('fromJSON keeps required-variable bindings', T.identity(T.fromJSON(JSON.parse(JSON.stringify(T.toJSON(bound))))) === T.identity(bound), uri);
 }
 
-// DEFAULT is never silent: the result lists it; recordDefaults adds an annotation and a pulse; identity unchanged
-for (const id of ['intent-default']) {
-  const q = T.QUERIES.find(x => x.id === id); const t = T.parseURI(q.uri); const r = run(t);
-  tally('DEFAULT runs and lists the default in the result', r.kind === 'rows' && r.defaults && r.defaults[0].var === 'tax_year' && r.defaults[0].value === 2024);
-  const rec = T.recordDefaults(q.uri, {at: '2026-10-05T00:00:00.000Z'});
-  const p = metaOf(rec.tree, 'pulse')[0];
-  tally('recordDefaults annotates and stamps a pulse', rec.tree.spikes.some(sp => sp.id === 'default-tax_year' && sp.data) && p.defaults && p.defaults[0].value === 2024 && p.parent === T.identity(t));
-  tally('recordDefaults keeps identity', T.identity(rec.tree) === T.identity(t));
-  tally('recordDefaults is idempotent on annotations', T.recordDefaults(rec.uri, {pulse: false}).tree.spikes.filter(sp => sp.id === 'default-tax_year').length === 1);
-  tally('fromJSON does not turn a default into a binding', T.identity(T.fromJSON(JSON.parse(JSON.stringify(T.toJSON(t))))) === T.identity(t));
+// every plain gap in the query halts too, with no rows listed
+for (const uri of corpus) {
+  const t = T.parseURI(uri); if (!t.gaps.length || t.required.length) continue;
+  const r = run(t);
+  tally('a plain query gap halts (no requiredBy)', r.kind === 'halt' && JSON.stringify(r.gaps) === JSON.stringify(t.gaps) && r.requiredBy === undefined, uri);
 }
-// the demo: ask until bound, then the Postgres-verified answer (verify.mjs checks 59.25 against PostgreSQL)
+// resultKey: same identity with and without a required variable, but a different result key (it halts)
 {
-  const ask = T.parseURI(T.QUERIES.find(x => x.id === 'intent-ask').uri);
-  const r1 = run(ask);
-  tally('demo: ask until $tax_year is bound', r1.kind === 'ask' && r1.question === 'Before submitting, the user must state the tax year they are referencing.');
-  const r2 = run(T.edit(T.serialize(ask).uri, [{op: 'bind', var: 'tax_year', value: '2024'}]).tree);
+  const base = T.QUERIES.find(x => x.id === 'csv-us-hours-2024').uri.replace('&$tax_year=2024', '').replace('eq(year(date),$tax_year)', 'true').replace('and(eq(work_country,\'US\'),true)', "eq(work_country,'US')");
+  const plain = T.parseURI(T.QUERIES.find(x => x.id === 'intent-require-only').uri.replace(/&~intent=.*$/, ''));
+  const req = T.parseURI(T.QUERIES.find(x => x.id === 'intent-require-only').uri);
+  tally('required variable: same identity, different resultKey, halts', T.identity(plain) === T.identity(req) && T.resultKey(plain) !== T.resultKey(req) && run(req).kind === 'halt' && run(plain).kind === 'rows', base);
+}
+// the demo: halt until bound, then the Postgres-verified answer (verify.mjs checks 59.25 against PostgreSQL)
+{
+  const halted = T.parseURI(T.QUERIES.find(x => x.id === 'intent-halt').uri);
+  const r1 = run(halted);
+  tally('demo: halts until $tax_year is bound', r1.kind === 'halt' && r1.requiredBy[0].text === 'Before submitting, the user must state the tax year they are referencing.');
+  const r2 = run(T.edit(T.serialize(halted).uri, [{op: 'bind', var: 'tax_year', value: '2024'}]).tree);
   tally('demo: bound, it runs (59.25)', r2.kind === 'rows' && r2.rows[0][0] === 59.25, JSON.stringify(r2));
 }
 // malformed intent rows are errors, so they cannot be silently ignored
-for (const bad of [[{require: 'tax_year'}], [{require: '$x', if_empty: 'MAYBE'}], [{require: '$x', if_empty: 'DEFAULT'}], [{if_empty: 'ASK'}], ['just text in an array']]) {
+for (const bad of [[{require: 'tax_year'}], [{require: '$x', if_empty: 'MAYBE'}], [{require: '$x', if_empty: 'BLOCK'}], [{require: '$x', if_empty: 'WARN'}], [{require: '$x', if_empty: 'DEFAULT', default: 1}], [{require: '$x', if_empty: 'halt'}], [{if_empty: 'HALT'}], ['just text in an array']]) {
   const t = T.parseURI('!tcxp:/registry/math/eval?expr=gt(1,0)&~intent=' + encodeURIComponent(JSON.stringify(bad)));
   tally('malformed intent rows are errors', t.diagnostics.some(d => d.level === 'error' && /~intent row/.test(d.msg)), JSON.stringify(bad));
+}
+// ASK and ACT are reserved: an error naming the reservation, never a silent HALT
+for (const mode of ['ASK', 'ACT']) {
+  const t = T.parseURI('!tcxp:/registry/math/eval?expr=gt(1,0)&~intent=' + encodeURIComponent(JSON.stringify([{role: 'manager', text: 'x', require: '$x', if_empty: mode}])));
+  const d = t.diagnostics.find(x => x.level === 'error');
+  let threw = false; try { T.execute(t); } catch (e) { threw = true; }
+  tally('ASK and ACT are reserved (error, never a silent HALT)', !!d && d.msg.includes(mode + ' is reserved for a future version; v0.2 supports HALT only') && threw && t.required.length === 0, JSON.stringify(t.diagnostics));
 }
 // edit param op (function parameters), symmetric with bind
 {

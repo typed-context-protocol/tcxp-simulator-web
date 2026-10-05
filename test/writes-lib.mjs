@@ -26,8 +26,8 @@ export async function compareWrite(T, pg, plain, at) {
   }
   if (at.gaps.length) {
     const store = T.newStore();
-    const ok = T.execute(plain, {store}).kind === 'gap' && T.execute(at, {store}).kind === 'gap' && !T.dataChanged(store);
-    return {ok, outcome: 'gap', detail: 'gap ' + at.gaps.join(',') + ' blocks preview and write', result: {kind: 'gap', gaps: at.gaps}};
+    const ok = T.execute(plain, {store}).kind === 'halt' && T.execute(at, {store}).kind === 'halt' && !T.dataChanged(store);
+    return {ok, outcome: 'gap', detail: 'halt ' + at.gaps.join(',') + ': no preview, no write', result: {kind: 'halt', gaps: at.gaps}};
   }
   const store = T.newStore();
   let pv = null, mem = null, memErr = null, pgRes = null, pgErr = null;
