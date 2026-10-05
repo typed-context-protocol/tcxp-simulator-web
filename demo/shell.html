@@ -1,0 +1,189 @@
+<title>tcxp Tax Intake</title>
+<meta name="description" content="A three-column demo on the tcxp SDK: a manager's rule halts a tax question that doesn't state the tax year, and every state lives in one !tcxp:/ address.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: manager rules | chat | under the hood. Same tokens as the tcxp workbench. */
+:root {
+  --paper:#F6F8F7; --panel:#FFFFFF; --ink:#18211E; --ink-2:#4A5753; --ink-3:#77837F;
+  --line:#DDE4E1; --line-2:#C6D0CC; --accent:#0D7A62; --accent-ink:#FFFFFF; --sel:#E3F3ED;
+  --ok:#1C7A44; --ok-bg:#E2F4E8; --halt:#8C5A00; --halt-bg:#FFF3A3; --bad:#B42318; --bad-bg:#FDE7E4; --warn:#8A5A06; --warn-bg:#FBF0D9;
+  --op:#1E6E51; --op-bg:#A9E7CB; --ref:#6B3FA0; --ref-bg:#E2D5F8; --var:#8B5A1B; --var-bg:#F4DEB9; --val:#196F82; --val-bg:#BEEAF4; --ann:#B4335E; --ann-bg:#FBD3DE;
+  --font-ui:"Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-code:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper:#0F1513; --panel:#151C19; --ink:#E2EAE6; --ink-2:#A7B4AF; --ink-3:#75847E; --line:#25302C; --line-2:#33413B; --accent:#4CCFA3; --accent-ink:#06261C; --sel:#183128;
+  --ok:#6BD69A; --ok-bg:#12301F; --halt:#FBF2B8; --halt-bg:#3A3407; --bad:#F59A8E; --bad-bg:#3A1714; --warn:#E9BC6A; --warn-bg:#33270F;
+  --op:#5ED2A1; --op-bg:#173B2E; --ref:#BE9CF2; --ref-bg:#2D2148; --var:#E1B36B; --var-bg:#3A2B13; --val:#5DC9DF; --val-bg:#11343F; --ann:#F08AAE; --ann-bg:#40172A; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --paper:#0F1513; --panel:#151C19; --ink:#E2EAE6; --ink-2:#A7B4AF; --ink-3:#75847E; --line:#25302C; --line-2:#33413B; --accent:#4CCFA3; --accent-ink:#06261C; --sel:#183128;
+  --ok:#6BD69A; --ok-bg:#12301F; --halt:#FBF2B8; --halt-bg:#3A3407; --bad:#F59A8E; --bad-bg:#3A1714; --warn:#E9BC6A; --warn-bg:#33270F;
+  --op:#5ED2A1; --op-bg:#173B2E; --ref:#BE9CF2; --ref-bg:#2D2148; --var:#E1B36B; --var-bg:#3A2B13; --val:#5DC9DF; --val-bg:#11343F; --ann:#F08AAE; --ann-bg:#40172A; color-scheme: dark; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 14px/1.5 var(--font-ui); }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+code, pre { font-family: var(--font-code); font-size: 12.5px; }
+.app { display: flex; flex-direction: column; height: 100%; }
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.mark { font: 600 18px/1 var(--font-code); } .mark b { color: var(--accent); font-weight: 600; }
+.brand .sub { color: var(--ink-3); font-size: 13px; }
+.tools { display: flex; gap: 10px; align-items: center; }
+.switch { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); cursor: pointer; user-select: none; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.track { width: 32px; height: 18px; border-radius: 9px; background: var(--line-2); position: relative; flex: none; transition: background .15s; }
+.track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--panel); transition: transform .15s; }
+.switch input:checked + .track { background: var(--accent); } .switch input:checked + .track::after { transform: translateX(14px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel); font-size: 13px; font-weight: 500; }
+.btn:hover { border-color: var(--ink-3); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.small { padding: 3px 9px; font-size: 12px; }
+.cols { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr) minmax(360px, 34%); }
+.col { min-width: 0; min-height: 0; overflow: auto; }
+.left { background: var(--panel); border-right: 1px solid var(--line); padding: 14px 14px 24px; display: flex; flex-direction: column; gap: 12px; }
+.mid { display: flex; flex-direction: column; background: var(--paper); }
+.right { background: var(--panel); border-left: 1px solid var(--line); padding: 14px 16px 28px; display: flex; flex-direction: column; gap: 14px; }
+h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.lede { margin: 2px 0 0; color: var(--ink-3); font-size: 12.5px; }
+.eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 6px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.rule { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--paper); }
+.rule-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rid { font: 600 12px var(--font-code); color: var(--ann); background: var(--ann-bg); border-radius: 999px; padding: 0 8px; }
+.x { margin-left: auto; border: 0; background: none; color: var(--ink-3); font-size: 18px; line-height: 1; padding: 0 4px; }
+.x:hover { color: var(--bad); }
+.fl { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--ink-3); }
+.fl textarea, .fl input, .fl select { border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 8px; background: var(--panel); font-size: 13px; color: var(--ink); resize: vertical; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 8px; }
+.fl input, .fl select, .fl textarea { width: 100%; min-width: 0; }
+.review { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--ink-3); }
+.rv { border: 1px solid var(--line-2); background: var(--panel); border-radius: 999px; padding: 2px 9px; font-size: 12px; color: var(--ink-2); }
+.rv.on.pass { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+.rv.on.fail { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+.tag { display: inline-block; font-size: 11.5px; font-weight: 600; border-radius: 999px; padding: 1px 8px; white-space: nowrap; vertical-align: 1px; }
+.tag.ok { background: var(--ok-bg); color: var(--ok); } .tag.halt { background: var(--halt-bg); color: var(--halt); } .tag.mute { background: var(--paper); color: var(--ink-3); border: 1px solid var(--line); } .tag.warnt { background: var(--warn-bg); color: var(--warn); }
+.note { color: var(--ink-3); font-size: 12px; }
+.chat-head { padding: 14px 18px 10px; border-bottom: 1px solid var(--line); background: var(--panel); display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+.source { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
+.thread { flex: 1; overflow: auto; padding: 18px; display: flex; flex-direction: column; gap: 10px; min-height: 260px; }
+.empty { color: var(--ink-3); font-size: 13px; margin: 0; }
+.thread > .empty { margin: auto; text-align: center; max-width: 40ch; }
+.msg { max-width: 78%; padding: 9px 13px; border-radius: 12px; line-height: 1.45; word-break: break-word; }
+.msg.user { align-self: flex-end; background: var(--sel); border-radius: 12px 12px 4px 12px; }
+.msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-radius: 12px 12px 12px 4px; }
+.msg.sys { align-self: center; color: var(--ink-3); font-size: 12.5px; background: none; padding: 2px; }
+.suggests { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 18px 10px; }
+.suggest { border: 1px dashed var(--line-2); background: var(--panel); border-radius: 999px; padding: 5px 12px; font-size: 12.5px; color: var(--ink-2); text-align: left; }
+.suggest:hover { border-color: var(--accent); color: var(--ink); }
+.composer { border-top: 1px solid var(--line); padding: 12px 14px; display: flex; gap: 8px; align-items: flex-end; background: var(--panel); }
+.composer textarea { flex: 1; min-width: 0; resize: none; min-height: 42px; max-height: 140px; border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; background: var(--paper); line-height: 1.4; }
+.composer textarea:focus { outline: none; border-color: var(--accent); }
+.file-btn { position: relative; overflow: hidden; }
+.file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.status { border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; border: 1.5px solid; }
+.status b { font: 600 16px var(--font-code); letter-spacing: .04em; }
+.status span { font-size: 13px; }
+.status.halt { background: var(--halt-bg); color: var(--halt); border-color: var(--halt); border-style: dashed; }
+.status.ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+.status.idle { background: var(--paper); color: var(--ink-3); border-color: var(--line); }
+.status.bad { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+.card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-width: 0; }
+.anat { padding: 10px 12px; font: 12px/1.75 var(--font-code); word-break: break-all; }
+.t-key, .t-operator, .t-call { color: var(--op); font-weight: 600; } .t-reference { color: var(--ref); } .t-slot, .t-param { color: var(--var); font-weight: 600; }
+.t-slotkey { background: var(--var-bg); color: var(--var); border-radius: 3px; padding: 0 2px; font-weight: 600; } .t-value { color: var(--val); }
+.t-metakey { background: var(--ann-bg); color: var(--ann); border-radius: 3px; padding: 0 2px; font-weight: 600; } .t-meta { color: var(--ann); opacity: .85; }
+.t-punct { color: var(--ink-3); } .t-scheme, .t-registry, .t-path { color: var(--ink-2); } .t-registry { font-weight: 600; }
+.t-gap { background: var(--halt-bg); color: var(--halt); outline: 1.5px dashed var(--halt); border-radius: 3px; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 11.5px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--paper); }
+td { padding: 6px 10px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+.tree { padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; }
+.tn { display: flex; align-items: center; gap: 8px; }
+.node { font: 600 12px var(--font-code); border-radius: 999px; padding: 1px 9px; border: 1.5px solid; }
+.node.operator { background: var(--op-bg); color: var(--op); border-color: var(--op); }
+.node.reference { background: var(--ref-bg); color: var(--ref); border-color: var(--ref); font-weight: 500; }
+.node.variable { background: var(--var-bg); color: var(--var); border-color: var(--var); }
+.node.value { background: var(--val-bg); color: var(--val); border-color: var(--val); font-weight: 500; }
+.node.gap { background: var(--halt-bg); color: var(--halt); border-color: var(--halt); border-style: dashed; }
+.tn .sub { font: 11px var(--font-code); color: var(--ink-3); }
+pre { margin: 0; padding: 10px 12px; overflow-x: auto; font-size: 12px; line-height: 1.55; }
+.pulses { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; }
+.pulses li { display: grid; grid-template-columns: 42px 70px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 12px; border-top: 1px solid var(--line); font-size: 12.5px; cursor: pointer; }
+.pulses li:first-child { border-top: 0; }
+.pulses li:hover { background: var(--paper); }
+.pstep { font: 600 12px var(--font-code); } .pfrom { font: 11.5px var(--font-code); color: var(--ink-3); } .pwhy { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pulse-uri { margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); font: 11.5px/1.6 var(--font-code); word-break: break-all; white-space: pre-wrap; color: var(--ink-2); }
+.handler-note { font-size: 12.5px; color: var(--ink-2); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+@media (max-width: 1100px) {
+  .app { height: auto; min-height: 100%; } .cols { grid-template-columns: 300px minmax(0, 1fr); } .col { overflow: visible; }
+  .right { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+  .mid { min-height: 560px; }
+}
+@media (max-width: 720px) {
+  .cols { grid-template-columns: minmax(0, 1fr); }
+  .left { order: 2; border-right: 0; border-top: 1px solid var(--line); } .mid { order: 1; } .right { order: 3; }
+  .brand .sub, .switch .lbl { display: none; }
+  .msg { max-width: 92%; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app">
+  <header class="bar">
+    <div class="brand"><span class="mark"><b>!</b>tcxp</span><span class="sub">Tax intake · built on the tcxp SDK</span></div>
+    <div class="tools">
+      <label class="switch" title="Mirror the current address into the browser address bar"><input type="checkbox" id="addr-toggle"><span class="track" aria-hidden="true"></span><span class="lbl">Address bar</span></label>
+      <button class="btn" id="reset" type="button">New conversation</button>
+    </div>
+  </header>
+  <main class="cols">
+    <section class="col left" aria-label="Manager checklist">
+      <div><h2>Manager checklist</h2><p class="lede">Rules written in plain language. Each one requires a variable. If it's missing, the address halts.</p></div>
+      <div id="rules" style="display:flex;flex-direction:column;gap:10px"></div>
+      <button class="btn" id="add-rule" type="button">+ Add a rule</button>
+      <p class="handler-note">The protocol only decides <b>whether</b> something may run. What happens next (asking, blocking, warning) is the application's handler. Here, the chat asks.</p>
+    </section>
+
+    <section class="col mid" aria-label="Chat">
+      <div class="chat-head">
+        <div><h2>Ask about the client file</h2><div class="source" id="source"></div></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <label class="btn small file-btn">Attach CSV<input type="file" id="csv-input" accept=".csv,text/csv" aria-label="Attach a CSV file"></label>
+          <button class="btn small" id="use-sample" type="button">Use sample file</button>
+        </div>
+      </div>
+      <div class="thread" id="thread"><p class="empty" id="thread-empty">Ask a question about the attached file. Try one of the questions below.</p></div>
+      <div class="suggests">
+        <button class="suggest" type="button" data-q="What are the US hours worked in my client CSV?">What are the US hours worked in my client CSV?</button>
+        <button class="suggest" type="button" data-q="What are the US hours worked in my client CSV for tax year 2024?">…for tax year 2024?</button>
+      </div>
+      <form class="composer" id="chat-form" autocomplete="off">
+        <textarea id="chat-input" rows="1" placeholder="Ask a question, or answer one…" aria-label="Message"></textarea>
+        <button class="btn primary" type="submit">Send</button>
+      </form>
+    </section>
+
+    <section class="col right" aria-label="Under the hood">
+      <div><h2>Under the hood</h2><p class="lede">Everything here is computed from one address.</p></div>
+      <div class="status idle" id="status"></div>
+      <div><div class="eyebrow"><span>Address</span><button class="btn small" id="copy-addr" type="button">Copy</button></div><div class="card" id="addr"></div></div>
+      <div><div class="eyebrow"><span>Requirements</span></div><div class="card" id="reqs"></div></div>
+      <div><div class="eyebrow"><span>Expression tree</span></div><div class="card tree" id="tree"></div></div>
+      <div><div class="eyebrow"><span>SQL fiber</span></div><div class="card" id="sql"></div></div>
+      <div><div class="eyebrow"><span>Result</span></div><div class="card" id="result"></div></div>
+      <div><div class="eyebrow"><span>Pulses</span><span class="note">click one to see its address</span></div><div class="card"><ul class="pulses" id="pulses"></ul><pre id="pulse-uri" hidden></pre></div></div>
+    </section>
+  </main>
+</div>
+<!--SDK-->
+<script>
+/*DEMO*/
+</script>

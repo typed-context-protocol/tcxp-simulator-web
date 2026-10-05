@@ -12,6 +12,10 @@ A decision state, written as one line of text, that parses into an expression tr
 
 Open `tcxp-workbench.html` in any browser. It is one self-contained file with no build step and no server, so it also works as a GitHub gist or GitHub Pages page. Hosted on its own, the *Address bar* toggle writes each pulse into the URL as `#!tcxp:/…`, and opening such a link loads it.
 
+Live: [workbench](https://typed-context-protocol.github.io/tcxp-simulator-web/) · [tax intake demo](https://typed-context-protocol.github.io/tcxp-simulator-web/tax-intake.html)
+
+**Tax intake demo.** `tax-intake.html` is a small app built only on `tcxp.js`, which it loads from next to it. A manager's checklist rule ("the user must state the tax year") requires `$tax_year`. Ask *"What are the US hours worked in my client CSV?"* and the address halts and the chat asks for the year; reply *2024* and it runs: 59.25 hours. Its sources are in `demo/` (`python3 demo/build_demo.py` writes an inline single-file build and a linked build into `demo/`; the linked build is `tax-intake.html`).
+
 ## What's inside
 
 | Path | What it is |
@@ -22,6 +26,7 @@ Open `tcxp-workbench.html` in any browser. It is one self-contained file with no
 | `lean/LEAN.md` | What is proved, and the order of the remaining proofs |
 | `src/` | Sources: `engine.js` (protocol), `data_tail.js` and `_school.js` (registries, schemas, seed data, addresses), `app.js`, `shell.html`, build scripts |
 | `tcxp.js` | The engine as one file. Works in browsers and Node |
+| `tax-intake.html`, `demo/` | Tax intake demo built on `tcxp.js`: manager rules, chat, and the address that halts or runs |
 | `test/verify.mjs` | Runs all 20 addresses and 29 construct probes in PostgreSQL and writes `snapshot.json` |
 | `test/fuzz.mjs` | Property test: random addresses from `FilterGenerator`, checked against the rules and against PostgreSQL |
 

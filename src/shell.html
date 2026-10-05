@@ -69,6 +69,7 @@ code, pre, .mono { font-family: var(--font-code); }
 .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel); font-size: 13px; font-weight: 500; }
 .btn:hover { border-color: var(--ink-3); }
+a.btn { color: inherit; text-decoration: none; }
 .btn svg { width: 16px; height: 16px; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn.quiet { border-color: transparent; background: transparent; color: var(--ink-2); padding: 4px 8px; }
@@ -310,6 +311,7 @@ table.grid td.wrap { white-space: normal; min-width: 240px; }
   <header class="bar">
     <div class="brand"><span class="mark"><b>!</b>tcxp</span><span class="sub">Typed Context Protocol · v0.1 draft</span></div>
     <div class="bar-actions">
+      <a class="btn" href="tax-intake.html" title="A three-column demo built on tcxp.js: a manager's rule halts a tax question until the tax year is stated">Tax intake demo</a>
       <label class="switch" title="Mirror the latest pulse into the browser address bar as #!tcxp:/…">
         <input type="checkbox" id="addr-toggle"><span class="track" aria-hidden="true"></span><span class="lbl">Address bar</span>
       </label>
