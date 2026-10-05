@@ -11,12 +11,12 @@ A decision state, written as one line of text, that parses into an expression tr
 ## Install
 
 ```sh
-npm install tcxp        # JavaScript
+npm install @tcxp/tcxp  # JavaScript
 pip install tcxp        # Python: same engine, same results (see python/)
 ```
 
 ```js
-const tcxp = require('tcxp');
+const tcxp = require('@tcxp/tcxp');
 const uri = "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'";
 const tree = tcxp.parseURI(uri);
 console.log(tcxp.serialize(tree).uri);        // canonical form

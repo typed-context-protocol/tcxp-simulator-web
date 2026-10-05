@@ -2,7 +2,7 @@
 
 The Typed Context Protocol (tcxp) v0.1 reference engine for Python. A decision state is written as one line of text that parses into an expression tree, carries its own context, and runs.
 
-This is the same engine as the [`tcxp` npm package](https://www.npmjs.com/package/tcxp), ported line for line. Both packages are released together from the same commit with the same version number. Every release must reproduce the JavaScript engine's output for thousands of conformance vectors, byte for byte.
+This is the same engine as the [`@tcxp/tcxp` npm package](https://www.npmjs.com/package/@tcxp/tcxp), ported line for line. Both packages are released together from the same commit with the same version number. Every release must reproduce the JavaScript engine's output for thousands of conformance vectors, byte for byte.
 
 Pure Python 3.10+, no dependencies, typed (`py.typed`).
 
@@ -28,7 +28,7 @@ print(result["kind"], len(result["rows"]))       # rows 7
 The JavaScript version of the same lines:
 
 ```js
-const tcxp = require('tcxp');
+const tcxp = require('@tcxp/tcxp');
 const tree = tcxp.parseURI(uri);
 tcxp.serialize(tree).uri; tcxp.identity(tree); tcxp.toSQL(tree).sql; tcxp.execute(tree);
 ```

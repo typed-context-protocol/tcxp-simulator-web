@@ -1,10 +1,11 @@
 {
-  "name": "tcxp",
+  "name": "@tcxp/tcxp",
   "version": "0.1.0",
   "description": "Typed Context Protocol (tcxp) v0.1 reference engine: one-line addresses that parse into expression trees, carry their own context, and run",
   "keywords": ["tcxp", "typed-context-protocol", "uri", "query", "sql", "expression-tree", "decision-state", "provenance"],
   "author": "Ron Itelman",
   "license": "Apache-2.0",
+  "publishConfig": { "access": "public" },
   "main": "tcxp.js",
   "files": ["tcxp.js", "README.md", "SPEC.md", "LICENSE"],
   "homepage": "https://github.com/typed-context-protocol/tcxp-simulator-web#readme",
