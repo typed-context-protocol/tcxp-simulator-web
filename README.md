@@ -8,6 +8,26 @@ A decision state, written as one line of text, that parses into an expression tr
 
 `$tax_year` has no value, so it is a **gap**. Nothing runs until it is bound. Add `&$tax_year=2024` (before the `~` keys) and it runs.
 
+## Install
+
+```sh
+npm install tcxp        # JavaScript
+pip install tcxp        # Python: same engine, same results (see python/)
+```
+
+```js
+const tcxp = require('tcxp');
+const uri = "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'";
+const tree = tcxp.parseURI(uri);
+console.log(tcxp.serialize(tree).uri);        // canonical form
+console.log(tcxp.identity(tree));             // identity (ignores ~ metadata)
+console.log(tcxp.toSQL(tree).sql);            // SELECT * FROM students WHERE cohort = $1
+const result = tcxp.execute(tree);            // runs on the built-in demo data
+console.log(result.kind, result.rows.length); // rows 7
+```
+
+Licensed under Apache-2.0 (see `LICENSE`).
+
 ## Open it
 
 Open `tcxp-workbench.html` in any browser. It is one self-contained file with no build step and no server, so it also works as a GitHub gist or GitHub Pages page. Hosted on its own, the *Address bar* toggle writes each pulse into the URL as `#!tcxp:/…`, and opening such a link loads it.

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tcxp"
+version = "0.1.0"
+description = "Typed Context Protocol (tcxp) v0.1 reference engine: one-line addresses that parse into expression trees, carry their own context, and run"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Ron Itelman" }]
+keywords = ["tcxp", "typed-context-protocol", "uri", "query", "sql", "expression-tree", "decision-state", "provenance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7", "psycopg[binary]>=3.2"]
+
+[project.urls]
+Homepage = "https://github.com/typed-context-protocol/tcxp-simulator-web"
+Repository = "https://github.com/typed-context-protocol/tcxp-simulator-web"
+Issues = "https://github.com/typed-context-protocol/tcxp-simulator-web/issues"
+Specification = "https://github.com/typed-context-protocol/tcxp-simulator-web/blob/main/SPEC.md"
+Workbench = "https://typed-context-protocol.github.io/tcxp-simulator-web/"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tcxp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/tcxp", "tests", "vectors", "tools", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

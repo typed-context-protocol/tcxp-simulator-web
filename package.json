@@ -1,13 +1,26 @@
 {
   "name": "tcxp",
   "version": "0.1.0",
-  "description": "Typed Context Protocol (tcxp) v0.1 reference engine, workbench, tests and Lean proofs",
+  "description": "Typed Context Protocol (tcxp) v0.1 reference engine: one-line addresses that parse into expression trees, carry their own context, and run",
+  "keywords": ["tcxp", "typed-context-protocol", "uri", "query", "sql", "expression-tree", "decision-state", "provenance"],
   "author": "Ron Itelman",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
+  "main": "tcxp.js",
+  "files": ["tcxp.js", "README.md", "SPEC.md", "LICENSE"],
+  "homepage": "https://github.com/typed-context-protocol/tcxp-simulator-web#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/typed-context-protocol/tcxp-simulator-web.git"
+  },
+  "bugs": {
+    "url": "https://github.com/typed-context-protocol/tcxp-simulator-web/issues"
+  },
   "scripts": {
     "build": "python3 src/build_core.py && python3 src/build.py",
     "verify": "node test/verify.mjs",
-    "fuzz": "node test/fuzz.mjs 2000 7"
+    "fuzz": "node test/fuzz.mjs 2000 7",
+    "vectors": "node python/tools/export_vectors.mjs",
+    "gate": "node test/verify.mjs && node test/fuzz.mjs 2000 7"
   },
   "devDependencies": { "@electric-sql/pglite": "0.5.8" }
 }
