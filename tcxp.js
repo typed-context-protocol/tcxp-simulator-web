@@ -189,6 +189,7 @@ const S = '!tcxp:/school.demo/sql/select?';
 const F = '!tcxp:/firm.demo/sql/select?';
 const W = '!tcxp:/school.demo/sql/';
 const WF = '!tcxp:/firm.demo/sql/';
+const C = '!tcxp:/client.demo/sql/select?';
 const enc = s => s.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23');
 const spikes = rows => '~spikes=' + enc(JSON.stringify(rows));
 const intent = t => '~intent=' + enc(t);
@@ -285,11 +286,21 @@ const QUERIES = [
     W + 'delete?from=submissions'),
   Q('write-fk-violation','writes','Enroll a student who does not exist (foreign key error)','Enroll student 99 in CS101.',
     W + "insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')",
-    "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 99, 1, DATE '2026-10-04', 'active')")
+    "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 99, 1, DATE '2026-10-04', 'active')"),
+  // v0.2 CSV data source: client.demo/client_hours is loaded from a CSV with registerCSV (see data_csv.js).
+  Q('csv-us-hours-2024','csv','US hours in the client CSV, tax year 2024','What are the US hours worked in my client CSV in 2024?',
+    C + "cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024",
+    "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024"),
+  Q('csv-hours-by-employee','csv','Hours per person in the client CSV','How many hours did each person log, and where?',
+    C + 'cols=employee,work_country,as(sum(hours),total_hours),as(count(*),days)&from=client_hours&group=employee,work_country&order=asc(employee),asc(work_country)',
+    'SELECT employee, work_country, sum(hours) AS total_hours, count(*) AS days FROM client_hours GROUP BY employee, work_country ORDER BY employee ASC, work_country ASC'),
+  Q('csv-insert-row','csv','Add a day to the client CSV (write)','Add a 6-hour US day for Ana Ruiz on 2025-10-01.',
+    '!tcxp:/client.demo/sql/insert?into=client_hours&cols=row_id,employee,date,hours,work_country&values=row(23,$who,$day,6,\'US\')&returning=*&$who=\'Ana Ruiz\'&$day=date\'2025-10-01\'',
+    "INSERT INTO client_hours (row_id, employee, date, hours, work_country) VALUES (23, 'Ana Ruiz', DATE '2025-10-01', 6, 'US') RETURNING *")
 ];
 const GROUPS = [
   ['students','School · students table'],['submissions','School · submissions table'],['joins','School · joins'],
-  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes']
+  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes'],['csv','Client CSV']
 ];
 /* ------------------------------------------------------------------ engine
    tcxp engine: parse an address into an expression tree, serialize it back,
@@ -1398,6 +1409,276 @@ function executeWrite(tree, vals, store, preview) {
   return out;
 }
 
+/* ------------------------------------------------------ edit and query API (v0.2) */
+// One way to change and to search any address. edit() takes JSON Patch style operations that use tcxp
+// pointers, re-parses after every operation, and returns only addresses that pass FilterGenerator.filter.
+const exprValText = n => n.value === null ? 'null'
+  : n.type === 'text' ? "'" + encLiteral(String(n.value).replace(/'/g, "''")) + "'"
+  : n.type === 'date' ? "date'" + encLiteral(String(n.value)) + "'" : String(n.value);
+// The text of an expression node as it appears in an address (a variable is always $name, bound or not).
+function exprText(n) {
+  if (n.kind === 'value') return exprValText(n);
+  if (n.kind === 'slot') return '$' + n.name;
+  if (n.kind === 'reference') return n.name;
+  return n.op + '(' + (n.children || []).map(exprText).join(',') + ')';
+}
+// The canonical address as a head and a list of raw (still encoded) key=value pairs.
+function pairsOf(uri) {
+  const q = uri.indexOf('?');
+  return {head: q < 0 ? uri : uri.slice(0, q), pairs: q < 0 ? [] : uri.slice(q + 1).split('&').map(p => { const i = p.indexOf('='); return {k: decodeURIComponent(p.slice(0, i)), raw: p}; })};
+}
+const joinPairs = (head, pairs) => head + (pairs.length ? '?' + pairs.map(p => p.raw).join('&') : '');
+function editError(i, op, msg) { return new TcxpError('Edit ' + (i + 1) + ' (' + (op && op.op) + '): ' + msg, 'edit', 'edit'); }
+const isDataKey = k => k[0] !== '$' && k[0] !== '~';
+const allowedOpsFor = mode => mode === 'math' ? MATH_OPS : mode === 'sql' ? SELECT_OPS : undefined;
+// Re-render one data key from a list of item nodes, as raw pairs (join= repeats, other keys are one pair).
+function keyPairs(tree, key, list) {
+  if (tree.parsed.mode === 'fn') return list.map(n => ({k: key, raw: key + '=' + encLiteral(String(n.value))}));
+  if (key === 'join') return list.map(n => ({k: key, raw: 'join=' + exprText(n)}));
+  return list.length ? [{k: key, raw: key + '=' + list.map(exprText).join(',')}] : [];
+}
+// Replace the pairs of one data key, keeping its position (the parser restores canonical order anyway).
+function withKey(uri, tree, key, list) {
+  const {head, pairs} = pairsOf(uri);
+  const at = pairs.findIndex(p => p.k === key);
+  const rest = pairs.filter(p => p.k !== key);
+  const firstNonData = rest.findIndex(p => !isDataKey(p.k));
+  const pos = at >= 0 ? Math.min(at, rest.length) : (firstNonData < 0 ? rest.length : firstNonData);
+  rest.splice(pos, 0, ...keyPairs(tree, key, list));
+  return joinPairs(head, rest);
+}
+function cloneNode(n) { return Object.assign({}, n, {children: n.children ? n.children.map(cloneNode) : n.children}); }
+// Item list for a key with node at path (segments after the key) replaced or removed.
+function editAt(list, segs, fn) {
+  list = list.map(cloneNode);
+  if (!segs.length) throw new Error('a path needs an item index after the key');
+  const idx = Number(segs[0]);
+  if (!Number.isInteger(idx) || !list[idx]) throw new Error('no item ' + segs[0]);
+  if (segs.length === 1) return fn(list, idx);
+  let parent = list[idx];
+  for (let i = 1; i < segs.length - 1; i++) {
+    if (parent.kind === 'slot') throw new Error('the path goes inside the value bound to $' + parent.name + '; use bind instead');
+    parent = (parent.children || [])[Number(segs[i])];
+    if (!parent) throw new Error('nothing at segment ' + segs[i]);
+  }
+  if (parent.kind === 'slot') throw new Error('the path goes inside the value bound to $' + parent.name + '; use bind instead');
+  const kids = parent.children || [];
+  const ci = Number(segs[segs.length - 1]);
+  if (!kids[ci]) throw new Error('nothing at segment ' + segs[segs.length - 1]);
+  parent.children = fn(kids.slice(), ci);
+  return list;
+}
+function applyEdit(uri, tree, op, i) {
+  const fail = msg => { throw editError(i, op, msg); };
+  const parse1 = (text, key) => { try { return parseExprList(text, key, allowedOpsFor(tree.parsed.mode)); } catch (e) { fail('the expression "' + text + '" does not parse: ' + e.message); } };
+  const pathSegs = path => { if (typeof path !== 'string' || path[0] !== '/') fail('a path starts with "/", like /where/0/1'); return path.split('/').slice(1).map(s => s.replace(/~1/g, '/').replace(/~0/g, '~')); };
+  const {head, pairs} = pairsOf(uri);
+  switch (op && op.op) {
+    case 'bind': {
+      if (!op.var || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(op.var)) fail('bind needs var, a variable name without $');
+      if (!tree.slots.includes(op.var) && !requiredVars(tree).includes(op.var)) fail('this address has no variable $' + op.var);
+      if (op.value === undefined || op.value === null || String(op.value) === '') fail('bind needs value, written as it would appear in the address (2024, \'text\', date\'2026-01-31\' or an @!tcxp:/ call)');
+      const v = String(op.value);
+      const raw = v.startsWith(CALL + SCHEME) ? v.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23') : encValue(v);
+      const rest = pairs.filter(p => p.k !== '$' + op.var);
+      const m = rest.findIndex(p => p.k[0] === '~');
+      rest.splice(m < 0 ? rest.length : m, 0, {k: '$' + op.var, raw: '$' + op.var + '=' + raw});
+      return joinPairs(head, rest);
+    }
+    case 'unbind': {
+      if (!pairs.some(p => p.k === '$' + op.var)) fail('$' + op.var + ' is not bound');
+      return joinPairs(head, pairs.filter(p => p.k !== '$' + op.var));
+    }
+    case 'replace': {
+      const segs = pathSegs(op.path); const key = segs.shift();
+      if (key[0] === '$') fail('replace works on data keys; to change a variable\'s value use bind');
+      if (key[0] === '~') fail('replace works on data keys; to change meta use meta');
+      const list = tree.parsed.items[key]; if (!list) fail('this address has no ' + key + '=');
+      if (tree.parsed.mode === 'fn') fail('a function parameter is a plain value; edit it with replace on the whole address');
+      const repl = parse1(String(op.expr), key);
+      let next;
+      if (!segs.length) next = repl;
+      else {
+        if (repl.length !== 1) fail('replace at ' + op.path + ' takes one expression');
+        try { next = editAt(list, segs, (arr, j) => { arr[j] = repl[0]; return arr; }); } catch (e) { fail(op.path + ': ' + e.message); }
+      }
+      return withKey(uri, tree, key, next);
+    }
+    case 'remove': {
+      const segs = pathSegs(op.path); const key = segs.shift();
+      if (key[0] === '$') { if (!pairs.some(p => p.k === key)) fail(key + ' is not bound'); return joinPairs(head, pairs.filter(p => p.k !== key)); }
+      if (key[0] === '~') { if (!pairs.some(p => p.k === key)) fail('there is no ' + key); return joinPairs(head, pairs.filter(p => p.k !== key)); }
+      const list = tree.parsed.items[key]; if (!list) fail('this address has no ' + key + '=');
+      if (!segs.length) return joinPairs(head, pairs.filter(p => p.k !== key));
+      let next;
+      try { next = editAt(list, segs, (arr, j) => { arr.splice(j, 1); return arr; }); } catch (e) { fail(op.path + ': ' + e.message); }
+      return withKey(uri, tree, key, next);
+    }
+    case 'add': {
+      const key = op.key;
+      if (!key || !isDataKey(key)) fail('add needs key, a data key such as order or where');
+      const repl = parse1(String(op.expr), key);
+      const list = tree.parsed.items[key];
+      const listy = tree.parsed.mode === 'sql' ? (CLAUSES[key] && (CLAUSES[key].list || CLAUSES[key].repeat)) : tree.parsed.mode === 'write' ? (WRITE_CLAUSES[tree.parsed.op][key] || {}).list : false;
+      if (list && !listy) fail(key + '= is already set and holds one expression; use replace');
+      return withKey(uri, tree, key, (list || []).map(cloneNode).concat(repl));
+    }
+    case 'annotate': {
+      const on = Array.isArray(op.on) ? op.on : [op.on];
+      if (!on.length || on.some(p => !resolvePointer(tree, p).length)) fail('every pointer in on must resolve to a node; ' + on.filter(p => !resolvePointer(tree, p).length).join(', ') + ' does not');
+      const m = tree.parsed.meta.find(x => x[0] === 'spikes');
+      const rows = m ? (Array.isArray(m[1]) ? m[1].slice() : [m[1]]) : [];
+      const id = op.id || 's' + (rows.length + 1);
+      if (rows.some(r => r && r.id === id)) fail('an annotation ' + id + ' already exists');
+      rows.push({id, on, meaning: op.meaning === undefined ? null : op.meaning, structure: op.structure === undefined ? null : op.structure, environment: op.environment === undefined ? null : op.environment});
+      return setMeta(head, pairs, 'spikes', rows);
+    }
+    case 'meta': {
+      if (!op.key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(op.key)) fail('meta needs key, a name without ~');
+      return setMeta(head, pairs, op.key, op.value);
+    }
+  }
+  throw editError(i, op, 'unknown op. Use bind, unbind, replace, remove, add, annotate or meta');
+}
+function setMeta(head, pairs, key, value) {
+  const rest = pairs.slice(); const at = rest.findIndex(p => p.k === '~' + key);
+  if (value === null || value === undefined) { if (at >= 0) rest.splice(at, 1); return joinPairs(head, rest); }
+  const pair = {k: '~' + key, raw: '~' + key + '=' + metaText(value)};
+  if (at >= 0) rest[at] = pair; else rest.push(pair);
+  return joinPairs(head, rest);
+}
+// Variables a ~intent row requires (Phase C); none in v0.1-style addresses.
+function requiredVars(tree) { return tree.required ? tree.required.map(r => r.name) : []; }
+// opts.pulse (default true) stamps a new ~pulse whose parent is the identity before the edit; opts.at fixes its time.
+function edit(uri, ops, opts) {
+  opts = opts || {};
+  if (!Array.isArray(ops)) ops = [ops];
+  let tree = parseURI(uri);
+  const before = identity(tree);
+  const prev = tree.parsed.meta.find(m => m[0] === 'pulse');
+  let cur = serialize(tree).uri;
+  ops.forEach((op, i) => {
+    const next = applyEdit(cur, tree, op, i);
+    try { tree = parseURI(next); } catch (e) { throw editError(i, op, 'the result would not parse: ' + e.message); }
+    const err = tree.diagnostics.find(d => d.level === 'error');
+    if (err) throw editError(i, op, 'the result would be invalid: ' + err.msg);
+    cur = serialize(tree).uri;
+  });
+  if (opts.pulse !== false) {
+    const step = prev && Array.isArray(prev[1]) && prev[1][0] && Number.isInteger(prev[1][0].step) ? prev[1][0].step + 1 : 1;
+    cur = withPulse(tree, step, opts.at, 0, before);
+    tree = parseURI(cur);
+  }
+  const f = FilterGenerator.filter(cur);
+  if (!f.ok) throw new TcxpError('Edit produced an address that breaks ' + f.rules.filter(r => !r.pass).map(r => r.id).join(', '), 'edit', 'edit');
+  return {uri: cur, tree};
+}
+
+// query(uri, selector) -> [{pointer, kind, label}]. Every pointer resolves with resolvePointer.
+function nodeLabel(n) {
+  if (n.kind === 'operator') return n.op;
+  if (n.kind === 'slot') return '$' + n.name;
+  if (n.kind === 'value') return exprValText(n);
+  return n.name;
+}
+function nodeKindOf(n) { return n.kind === 'slot' ? (n.children.length ? 'variable' : 'gap') : n.kind; }
+function allPointers(tree) {
+  const out = [];
+  Object.entries(tree.parsed.items).forEach(([key, list]) => list.forEach((item, i) => {
+    (function walk(n, path) { out.push({pointer: path, node: n}); (n.children || []).forEach((c, j) => walk(c, path + '/' + j)); })(item, '/' + key + '/' + i);
+  }));
+  return out;
+}
+function query(uri, selector) {
+  const tree = typeof uri === 'string' ? parseURI(uri) : uri;
+  const [what, arg] = String(selector).split(/:(.*)/s);
+  const pick = test => allPointers(tree).filter(x => test(x.node)).map(x => ({pointer: x.pointer, kind: nodeKindOf(x.node), label: nodeLabel(x.node)}));
+  switch (what) {
+    case 'gaps': return pick(n => n.kind === 'slot' && !n.param && !n.children.length).concat(
+      tree.parsed.mode === 'fn' ? pick(n => n.kind === 'slot' && n.param && !n.children.length) : []);
+    case 'variables': return pick(n => n.kind === 'slot');
+    case 'references': return pick(n => n.kind === 'reference' && (arg === undefined || n.name === arg || n.name.split('.').pop() === arg));
+    case 'operators': return pick(n => n.kind === 'operator' && (arg === undefined || n.op === arg));
+    case 'annotations': return tree.spikes.flatMap(sp => sp.targets.filter(t => t.nodes.length).map(t => ({pointer: t.ptr, kind: 'annotation', label: sp.id + ' · ' + sp.bits})));
+    case 'pointer': return resolvePointer(tree, arg).map(n => ({pointer: arg, kind: nodeKindOf(n), label: nodeLabel(n)}));
+  }
+  throw new TcxpError('Unknown selector "' + selector + '". Use gaps, variables, references, references:<name>, operators:<op>, annotations or pointer:<path>', 'query');
+}
+
+// fromJSON: the inverse of toJSON. It rebuilds the address from the tree, profile and meta alone.
+function fromJSON(j) {
+  const head = (j.call ? CALL : '') + SCHEME + j.registry + '/' + j.path;
+  const pairs = [], binds = [], seen = new Set();
+  const jt = n => n.kind === 'value' ? exprValText(n) : n.kind === 'slot' ? '$' + n.name : n.kind === 'reference' ? n.name : n.op + '(' + (n.children || []).map(jt).join(',') + ')';
+  const callText = c => { const [h, ...params] = c.children; return CALL + SCHEME + h.name + (params.filter(p => p.children).length ? '?' + params.filter(p => p.children).map(p => p.name + '=' + encLiteral(String(p.children[0].value))).join('&') : ''); };
+  (function collect(n) {
+    if (n.kind === 'slot' && !n.param && n.children && !seen.has(n.name)) {
+      seen.add(n.name); const b = n.children[0];
+      binds.push('$' + n.name + '=' + (b.kind === 'operator' && b.op === 'call' ? callText(b).replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23') : jt(b)));
+      return;
+    }
+    (n.children || []).forEach(collect);
+  })(j.profile === 'fn' ? {children: []} : j.tree);   // a function's parameter slots are keys, not $bindings
+  const clause = c => c.op.slice('clause:'.length);
+  if (j.profile === 'sql' || j.profile === 'write') j.tree.children.forEach(c => {
+    if (c.op.startsWith('clause:')) pairs.push(clause(c) + '=' + c.children.map(jt).join(','));
+    else pairs.push('join=' + jt(c));
+  });
+  else if (j.profile === 'math') pairs.push('expr=' + jt(j.tree));
+  else if (j.profile === 'fn') j.tree.children.slice(1).forEach(p => { if (p.children) pairs.push(p.name + '=' + encLiteral(String(p.children[0].value))); });
+  const meta = Object.entries(j.meta || {}).map(([k, v]) => '~' + k + '=' + metaText(v));
+  const all = pairs.concat(binds, meta);
+  return parseURI(head + (all.length ? '?' + all.join('&') : ''));
+}
+
+// registerCSV: a CSV as a table that sql/select and writes can use. Types are inferred (integer, numeric,
+// date, text) unless given as {column: type}. CSV rows have no identity of their own, so the table gets a
+// row_id integer PRIMARY KEY (1..n) as its first column; that keeps write inverses exact when rows repeat.
+function parseCSVText(text) {
+  const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (c === '"') q = false; else cell += c; continue; }
+    if (c === '"') q = true; else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += c;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim() !== ''));
+}
+function registerCSV(registry, table, csvText, types) {
+  if (!/^[a-z_][a-z0-9_]*$/.test(table)) throw new TcxpError('Table name "' + table + '" must be lower case letters, digits and _');
+  const rows = parseCSVText(String(csvText).trim());
+  if (rows.length < 2) throw new TcxpError('The CSV needs a header row and at least one data row');
+  const header = rows[0].map(h => h.trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'col');
+  if (new Set(header).size !== header.length || header.includes('row_id')) throw new TcxpError('CSV column names must be distinct and not row_id');
+  const body = rows.slice(1).map((r, n) => { if (r.length > header.length) throw new TcxpError('CSV row ' + (n + 2) + ' has more cells than the header'); return header.map((_, i) => r[i] === undefined ? '' : r[i].trim()); });
+  const given = types || {};
+  const colTypes = header.map((h, i) => {
+    if (given[h]) return given[h];
+    const vals = body.map(r => r[i]).filter(v => v !== '');
+    if (vals.length && vals.every(v => /^-?\d+$/.test(v))) return 'integer';
+    if (vals.length && vals.every(v => /^-?\d+(\.\d+)?$/.test(v))) return 'numeric';
+    if (vals.length && vals.every(v => isValidDate(v))) return 'date';
+    return 'text';
+  });
+  const seed = body.map((r, n) => [n + 1].concat(r.map((v, i) => {
+    if (v === '') return null;
+    const b = baseType(colTypes[i]);
+    if (['integer', 'bigint', 'smallint', 'numeric'].includes(b)) { const x = Number(v); if (Number.isNaN(x)) throw new TcxpError('CSV row ' + (n + 2) + ', column ' + header[i] + ': "' + v + '" is not a number'); return x; }
+    if (b === 'date' && !isValidDate(v)) throw new TcxpError('CSV row ' + (n + 2) + ', column ' + header[i] + ': "' + v + '" is not a date (YYYY-MM-DD)');
+    return v;
+  })));
+  const reg = REGISTRIES[registry] || (REGISTRIES[registry] = {title: registry, description: 'Registry with data loaded from CSV.', fns: {}, notes: {}});
+  if (!reg.db) reg.db = {schema: {name: registry, description: 'Tables loaded from CSV files.', tables: []}, seed: {}};
+  const def = {name: table, description: 'Loaded from CSV (' + seed.length + ' rows). row_id numbers the rows in file order.',
+    columns: [['row_id', 'integer', 'PRIMARY KEY', 'Row number in the file, 1 to n.']].concat(header.map((h, i) => [h, colTypes[i], '', 'CSV column "' + rows[0][i].trim() + '".']))};
+  reg.db.schema.tables = reg.db.schema.tables.filter(t => t.name !== table).concat([def]);
+  reg.db.seed[table] = seed;
+  delete STORE.tables[registry + '/' + table];
+  return def;
+}
+
 /* ------------------------------------------------------- pulse */
 // Each committed state gets one ~pulse row: {step, at, debounce_ms, parent}. Step counts commits, not keystrokes.
 // parent is the identity of the previous committed state (null for the first), so pulses form a chain.
@@ -1405,7 +1686,7 @@ const DEBOUNCE_MS = 300;
 // extra adds fields to the row, e.g. {undo: [inverse addresses]} for an executed write.
 function withPulse(tree, step, at, debounce, parent, extra) {
   const meta = tree.parsed.meta.filter(m => m[0] !== 'pulse');
-  meta.unshift(['pulse', [Object.assign({step, at: at || new Date().toISOString(), debounce_ms: debounce || DEBOUNCE_MS, parent: parent || null}, extra || {})]]);
+  meta.unshift(['pulse', [Object.assign({step, at: at || new Date().toISOString(), debounce_ms: debounce === undefined || debounce === null ? DEBOUNCE_MS : debounce, parent: parent || null}, extra || {})]]);
   const t = Object.assign({}, tree, {parsed: Object.assign({}, tree.parsed, {meta})});
   return serialize(t).uri;
 }
@@ -1423,6 +1704,9 @@ const RULES = [
 function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const PHRASES = ['How many hours did we bill?', 'Is the route safe?', 'Who joined in August?', 'Q3 revenue & margin', 'Ticket #42 follow-up', 'Discount of 15% applied', 'Check the roster before Friday'];
 const WORDS = ['world', 'team', 'Ada', 'café', 'R&D', 'issue #7', '100%', 'a b'];
+// The read stream draws only on the registries v0.1 shipped, so a seed gives the same addresses whatever
+// registries are added later (client.demo, registerCSV tables). test/compat.mjs checks the stream itself.
+const READ_REGISTRIES = ['school.demo', 'firm.demo', 'fleet.demo', 'registry'];
 
 class FilterGenerator {
   constructor(seed) { this.seed = seed === undefined ? 1 : seed; this.rand = mulberry32(this.seed); this.count = 0; }
@@ -1546,7 +1830,7 @@ class FilterGenerator {
     const r = this.rand();
     const expr = r < 0.2 ? arith(3) : r < 0.4 ? this.pick(['and', 'or']) + '(' + cmpx() + ',' + cmpx() + ')' : cmpx();
     const binds = {}; vars.forEach(v => { if (this.chance(0.85)) binds[v] = String(this.int(11) - 5); });
-    const reg = this.pick(Object.keys(REGISTRIES));
+    const reg = this.pick(READ_REGISTRIES);
     return this.withBindings('!tcxp:/' + reg + '/math/eval?expr=' + expr, binds);
   }
   call() {
@@ -1642,7 +1926,7 @@ class FilterGenerator {
   }
   meta(tree) {
     const parts = [];
-    const notes = []; Object.entries(REGISTRIES).forEach(([r, reg]) => Object.keys(reg.notes).forEach(n => notes.push('!tcxp:/' + r + '/' + n)));
+    const notes = []; READ_REGISTRIES.forEach(r => Object.keys(REGISTRIES[r].notes).forEach(n => notes.push('!tcxp:/' + r + '/' + n)));
     if (this.chance(0.6)) parts.push('~pulse=' + metaText([{step: 1 + this.int(500), at: new Date(Date.UTC(2026, 9, 1 + this.int(28), this.int(24), this.int(60), this.int(60), this.int(1000))).toISOString(), debounce_ms: DEBOUNCE_MS}]));
     if (this.chance(0.5)) parts.push('~intent=' + metaText(this.pick(PHRASES)));
     if (this.chance(0.5)) {
@@ -1725,9 +2009,40 @@ const COVERAGE = [
   ['Calls','Calls with arguments nested inside expressions','no',null]
 ];
 
+/* ------------------------------------------------------------- CSV data (v0.2) */
+// client.demo: a client's own file of work hours, loaded with registerCSV. The same rows as the tax intake
+// demo's sample file, so the two agree: US hours in calendar 2024 = 59.25.
+const CLIENT_CSV = `employee,date,hours,work_country
+Ana Ruiz,2024-02-12,5,US
+Ana Ruiz,2024-03-11,8,US
+Ana Ruiz,2024-05-20,6.5,US
+Ben Carter,2024-06-03,7,US
+Chen Wei,2024-06-10,8,CA
+Divya Rao,2024-04-15,7.5,IN
+Ana Ruiz,2024-08-05,8,US
+Ben Carter,2024-09-16,8,US
+Chen Wei,2024-10-07,6,US
+Erik Lund,2024-11-12,5,DE
+Fatima Noor,2024-12-02,7.25,US
+Fatima Noor,2024-12-30,3.5,US
+Ana Ruiz,2025-01-13,8,US
+Ben Carter,2025-02-24,4,US
+Divya Rao,2025-03-10,8,US
+Fatima Noor,2025-04-21,6,US
+Erik Lund,2025-05-05,8,DE
+Chen Wei,2025-06-16,7,CA
+Ana Ruiz,2025-07-14,8,US
+Ben Carter,2025-08-18,7.5,US
+Fatima Noor,2025-09-08,8,US
+Divya Rao,2025-09-22,6,IN`;
+REGISTRIES['client.demo'] = {title: 'Client file', description: 'A client CSV of work hours, loaded with registerCSV.', fns: {},
+  notes: {'rules/tax-year': 'Before submitting, the user must state the tax year they are referencing.'}};
+registerCSV('client.demo', 'client_hours', CLIENT_CSV, {hours: 'numeric(6,2)'});
+
 const api = {REGISTRIES, QUERIES, GROUPS, OPS, CLAUSES, CLAUSE_ORDER, COVERAGE, FACETS, SCHEME, DEBOUNCE_MS,
   parseURI, serialize, identity, strictForm, resolvePointer, toSQL, toMath, toJSON, execute, withPulse,
   newStore, resetData, dataChanged, tableRows, WRITE_CLAUSES, WRITE_ORDER,
+  edit, query, fromJSON, registerCSV, exprText,
   fullDDL, tableDDL, tableInserts, TcxpError, baseType, findSlot, FilterGenerator, RULES};
 root.TCXP = api;
 if (typeof module !== 'undefined') module.exports = api;

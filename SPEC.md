@@ -140,6 +140,8 @@ These are declared out of scope, and the test suite lists them: table aliases, D
 - **Fibers:** `toSQL`, `toMath`, `toJSON`
 - **Execution:** `execute(tree, {store, preview})`, `withPulse(tree, step, at, debounce, parent, extra)`
 - **Session data:** `newStore`, `resetData`, `dataChanged`, `tableRows`
+- **Edit and query (v0.2, §13):** `edit(uri, ops, opts)`, `query(uri, selector)`, `fromJSON(json)`, `exprText(node)`
+- **Data sources (v0.2, §13):** `registerCSV(registry, table, csvText, types)`
 - **Testing:** `FilterGenerator` (seeded random addresses; `nextWrite()` for random writes; `FilterGenerator.filter(uri)` to check any address against the rules)
 
 It is published in two languages, released together under the same version:
@@ -185,3 +187,29 @@ Tables without a primary key are matched on every column. The pulse of an execut
 **SQL fiber.** `INSERT INTO t (…) VALUES (…), (…) RETURNING …`, `UPDATE t SET c = … WHERE … RETURNING …`, `DELETE FROM t WHERE … RETURNING …`, with `$n` parameters for variables as in select.
 
 **Known differences from PostgreSQL,** all on inputs the engine is stricter about: the engine rejects a fractional number for an integer column (PostgreSQL rounds a literal) and a number for a text column (PostgreSQL casts it); and it checks UNIQUE against the rows so far, in table order, which is how PostgreSQL checks non-deferred constraints. The generated write tests never assign UNIQUE or PRIMARY KEY columns in an update, so that ordering is untested.
+
+## 13. Edit and query (added in v0.2)
+
+One way to change any address, and one way to search it. Both work on any profile.
+
+**`edit(uri, ops, opts) → {uri, tree}`.** `ops` is a list in the style of JSON Patch (RFC 6902), using tcxp pointers (§7):
+
+| Operation | Effect |
+|---|---|
+| `{op:"bind", var:"tax_year", value:"2024"}` | Bind `$tax_year`. `value` is the literal as written in an expression (`2024`, `'2026-fall'`, `date'2026-01-31'`, or an `@!tcxp:/…` call); `edit` does the percent-encoding. The variable must occur in the tree (or be required by an intent row, §14). |
+| `{op:"unbind", var:"tax_year"}` | Remove the binding; the variable becomes a gap again. |
+| `{op:"replace", path:"/where/0/1", expr:"eq(a,$b)"}` | Replace the node at the pointer. A path of just `/key` replaces the whole value. Paths into a bound value are refused (use `bind`). |
+| `{op:"remove", path:"/order"}` | Remove a key, a list item (`/cols/1`), an operand (`/where/0/2`), a binding (`/$x`) or a meta key (`/~intent`). |
+| `{op:"add", key:"order", expr:"desc(gpa)"}` | Add a data key, or append to a list key (`cols`, `order`, `group`, `join`, `values`, `set`, `returning`). Adding to a single-valued key that is already set is refused (use `replace`). |
+| `{op:"annotate", on:["/$tax_year"], meaning, structure, environment}` | Append a spike to `~spikes` (id `s<n>` unless given). Every pointer in `on` must resolve. |
+| `{op:"meta", key:"outcome", value:[…]}` | Set a meta key; `null` removes it. |
+
+Operations apply in order; the address is re-parsed after each one. If an operation would produce an address that does not parse, has an error diagnostic, or fails `FilterGenerator.filter` (canonical form, meta last, grammar), `edit` throws a plain-language `TcxpError` with `code:"edit"` that names the operation, and returns nothing. It never returns an invalid address.
+
+Unless `opts.pulse === false`, each `edit` call stamps a new `~pulse` row: `step` is the previous pulse's step plus one (1 if there was none), `parent` is the identity before the edit, `debounce_ms` is 0 (a programmatic edit is not debounced), and `at` is now (or `opts.at`). Following the parents of a series of edits gives the edit history.
+
+**`query(uri, selector) → [{pointer, kind, label}]`.** Selectors: `gaps`, `variables`, `references`, `references:<name>` (matches `name` or `table.name`), `operators`, `operators:<op>`, `annotations` (one row per resolving `on` pointer, labelled with the spike id and its MSE bits), `pointer:<path>`. Pointers are positional (`/key/item/child/…`), one per occurrence. **Invariant:** every returned pointer resolves with `resolvePointer`.
+
+**`fromJSON(json)`** is the inverse of `toJSON`: it rebuilds the address from the profile, the tree and the meta alone (it does not read `toJSON`'s `address` field). `identity(fromJSON(toJSON(t))) = identity(t)`, and the full canonical address is preserved too.
+
+**CSV as a data source.** `registerCSV(registry, table, csvText, types)` creates a table that `sql/select` and the write profiles use like any other. The first row is the header; names are lower-cased and non-alphanumerics become `_`. RFC 4180 quoting is supported; an empty cell is `null`. Column types are inferred (`integer`, `numeric`, `date`, else `text`) unless `types` gives them (`{hours: "numeric(6,2)"}`). Because CSV rows have no identity of their own, the table gets a first column `row_id integer PRIMARY KEY` numbering the rows 1 to n; that keeps write inverses exact when two rows are identical. The registry `client.demo` holds `client_hours` (employee, date, hours, work_country), loaded this way, and is verified in PostgreSQL by loading the same rows through the generated DDL and inserts.

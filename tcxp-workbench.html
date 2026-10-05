@@ -168,6 +168,15 @@ a.btn { color: inherit; text-decoration: none; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend .dash { width: 18px; border-top: 2px dashed var(--var-line); }
+.find { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--line); }
+.find label { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.find input { flex: 1; min-width: 0; border: 1px solid var(--line-2); border-radius: 6px; padding: 5px 9px; background: var(--panel); color: var(--ink); font: 13px var(--font-code); }
+.find-results { list-style: none; margin: 0; padding: 0 14px 10px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
+.find-results li { display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; cursor: default; }
+.find-results li:hover { border-color: var(--accent); background: var(--sel); }
+.find-results li code { font-family: var(--font-code); color: var(--ink-3); }
+.find-results li.none { border: 0; padding: 3px 0; color: var(--ink-3); }
+.find-results li.err { border: 0; padding: 3px 0; color: var(--bad); }
 .legend b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 .empty-tree { padding: 32px 16px; text-align: center; color: var(--ink-3); }
 
@@ -368,6 +377,12 @@ ul.inverse code { font-family: var(--font-code); word-break: break-all; }
         <div class="card">
           <div class="tree-scroll" id="tree-scroll"></div>
           <div class="legend" id="legend"></div>
+          <form class="find" id="find-form" autocomplete="off" role="search">
+            <label for="find-input">Find</label>
+            <input id="find-input" list="find-hints" placeholder="gaps · variables · references:gpa · operators:eq · annotations · pointer:/where/0" spellcheck="false">
+            <datalist id="find-hints"><option value="gaps"><option value="variables"><option value="references"><option value="operators"><option value="annotations"></datalist>
+          </form>
+          <ul class="find-results" id="find-results" aria-live="polite"></ul>
         </div>
       </div>
 
@@ -636,6 +651,7 @@ const S = '!tcxp:/school.demo/sql/select?';
 const F = '!tcxp:/firm.demo/sql/select?';
 const W = '!tcxp:/school.demo/sql/';
 const WF = '!tcxp:/firm.demo/sql/';
+const C = '!tcxp:/client.demo/sql/select?';
 const enc = s => s.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23');
 const spikes = rows => '~spikes=' + enc(JSON.stringify(rows));
 const intent = t => '~intent=' + enc(t);
@@ -732,11 +748,21 @@ const QUERIES = [
     W + 'delete?from=submissions'),
   Q('write-fk-violation','writes','Enroll a student who does not exist (foreign key error)','Enroll student 99 in CS101.',
     W + "insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')",
-    "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 99, 1, DATE '2026-10-04', 'active')")
+    "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 99, 1, DATE '2026-10-04', 'active')"),
+  // v0.2 CSV data source: client.demo/client_hours is loaded from a CSV with registerCSV (see data_csv.js).
+  Q('csv-us-hours-2024','csv','US hours in the client CSV, tax year 2024','What are the US hours worked in my client CSV in 2024?',
+    C + "cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024",
+    "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024"),
+  Q('csv-hours-by-employee','csv','Hours per person in the client CSV','How many hours did each person log, and where?',
+    C + 'cols=employee,work_country,as(sum(hours),total_hours),as(count(*),days)&from=client_hours&group=employee,work_country&order=asc(employee),asc(work_country)',
+    'SELECT employee, work_country, sum(hours) AS total_hours, count(*) AS days FROM client_hours GROUP BY employee, work_country ORDER BY employee ASC, work_country ASC'),
+  Q('csv-insert-row','csv','Add a day to the client CSV (write)','Add a 6-hour US day for Ana Ruiz on 2025-10-01.',
+    '!tcxp:/client.demo/sql/insert?into=client_hours&cols=row_id,employee,date,hours,work_country&values=row(23,$who,$day,6,\'US\')&returning=*&$who=\'Ana Ruiz\'&$day=date\'2025-10-01\'',
+    "INSERT INTO client_hours (row_id, employee, date, hours, work_country) VALUES (23, 'Ana Ruiz', DATE '2025-10-01', 6, 'US') RETURNING *")
 ];
 const GROUPS = [
   ['students','School · students table'],['submissions','School · submissions table'],['joins','School · joins'],
-  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes']
+  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes'],['csv','Client CSV']
 ];
 /* ------------------------------------------------------------------ engine
    tcxp engine: parse an address into an expression tree, serialize it back,
@@ -1845,6 +1871,276 @@ function executeWrite(tree, vals, store, preview) {
   return out;
 }
 
+/* ------------------------------------------------------ edit and query API (v0.2) */
+// One way to change and to search any address. edit() takes JSON Patch style operations that use tcxp
+// pointers, re-parses after every operation, and returns only addresses that pass FilterGenerator.filter.
+const exprValText = n => n.value === null ? 'null'
+  : n.type === 'text' ? "'" + encLiteral(String(n.value).replace(/'/g, "''")) + "'"
+  : n.type === 'date' ? "date'" + encLiteral(String(n.value)) + "'" : String(n.value);
+// The text of an expression node as it appears in an address (a variable is always $name, bound or not).
+function exprText(n) {
+  if (n.kind === 'value') return exprValText(n);
+  if (n.kind === 'slot') return '$' + n.name;
+  if (n.kind === 'reference') return n.name;
+  return n.op + '(' + (n.children || []).map(exprText).join(',') + ')';
+}
+// The canonical address as a head and a list of raw (still encoded) key=value pairs.
+function pairsOf(uri) {
+  const q = uri.indexOf('?');
+  return {head: q < 0 ? uri : uri.slice(0, q), pairs: q < 0 ? [] : uri.slice(q + 1).split('&').map(p => { const i = p.indexOf('='); return {k: decodeURIComponent(p.slice(0, i)), raw: p}; })};
+}
+const joinPairs = (head, pairs) => head + (pairs.length ? '?' + pairs.map(p => p.raw).join('&') : '');
+function editError(i, op, msg) { return new TcxpError('Edit ' + (i + 1) + ' (' + (op && op.op) + '): ' + msg, 'edit', 'edit'); }
+const isDataKey = k => k[0] !== '$' && k[0] !== '~';
+const allowedOpsFor = mode => mode === 'math' ? MATH_OPS : mode === 'sql' ? SELECT_OPS : undefined;
+// Re-render one data key from a list of item nodes, as raw pairs (join= repeats, other keys are one pair).
+function keyPairs(tree, key, list) {
+  if (tree.parsed.mode === 'fn') return list.map(n => ({k: key, raw: key + '=' + encLiteral(String(n.value))}));
+  if (key === 'join') return list.map(n => ({k: key, raw: 'join=' + exprText(n)}));
+  return list.length ? [{k: key, raw: key + '=' + list.map(exprText).join(',')}] : [];
+}
+// Replace the pairs of one data key, keeping its position (the parser restores canonical order anyway).
+function withKey(uri, tree, key, list) {
+  const {head, pairs} = pairsOf(uri);
+  const at = pairs.findIndex(p => p.k === key);
+  const rest = pairs.filter(p => p.k !== key);
+  const firstNonData = rest.findIndex(p => !isDataKey(p.k));
+  const pos = at >= 0 ? Math.min(at, rest.length) : (firstNonData < 0 ? rest.length : firstNonData);
+  rest.splice(pos, 0, ...keyPairs(tree, key, list));
+  return joinPairs(head, rest);
+}
+function cloneNode(n) { return Object.assign({}, n, {children: n.children ? n.children.map(cloneNode) : n.children}); }
+// Item list for a key with node at path (segments after the key) replaced or removed.
+function editAt(list, segs, fn) {
+  list = list.map(cloneNode);
+  if (!segs.length) throw new Error('a path needs an item index after the key');
+  const idx = Number(segs[0]);
+  if (!Number.isInteger(idx) || !list[idx]) throw new Error('no item ' + segs[0]);
+  if (segs.length === 1) return fn(list, idx);
+  let parent = list[idx];
+  for (let i = 1; i < segs.length - 1; i++) {
+    if (parent.kind === 'slot') throw new Error('the path goes inside the value bound to $' + parent.name + '; use bind instead');
+    parent = (parent.children || [])[Number(segs[i])];
+    if (!parent) throw new Error('nothing at segment ' + segs[i]);
+  }
+  if (parent.kind === 'slot') throw new Error('the path goes inside the value bound to $' + parent.name + '; use bind instead');
+  const kids = parent.children || [];
+  const ci = Number(segs[segs.length - 1]);
+  if (!kids[ci]) throw new Error('nothing at segment ' + segs[segs.length - 1]);
+  parent.children = fn(kids.slice(), ci);
+  return list;
+}
+function applyEdit(uri, tree, op, i) {
+  const fail = msg => { throw editError(i, op, msg); };
+  const parse1 = (text, key) => { try { return parseExprList(text, key, allowedOpsFor(tree.parsed.mode)); } catch (e) { fail('the expression "' + text + '" does not parse: ' + e.message); } };
+  const pathSegs = path => { if (typeof path !== 'string' || path[0] !== '/') fail('a path starts with "/", like /where/0/1'); return path.split('/').slice(1).map(s => s.replace(/~1/g, '/').replace(/~0/g, '~')); };
+  const {head, pairs} = pairsOf(uri);
+  switch (op && op.op) {
+    case 'bind': {
+      if (!op.var || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(op.var)) fail('bind needs var, a variable name without $');
+      if (!tree.slots.includes(op.var) && !requiredVars(tree).includes(op.var)) fail('this address has no variable $' + op.var);
+      if (op.value === undefined || op.value === null || String(op.value) === '') fail('bind needs value, written as it would appear in the address (2024, \'text\', date\'2026-01-31\' or an @!tcxp:/ call)');
+      const v = String(op.value);
+      const raw = v.startsWith(CALL + SCHEME) ? v.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23') : encValue(v);
+      const rest = pairs.filter(p => p.k !== '$' + op.var);
+      const m = rest.findIndex(p => p.k[0] === '~');
+      rest.splice(m < 0 ? rest.length : m, 0, {k: '$' + op.var, raw: '$' + op.var + '=' + raw});
+      return joinPairs(head, rest);
+    }
+    case 'unbind': {
+      if (!pairs.some(p => p.k === '$' + op.var)) fail('$' + op.var + ' is not bound');
+      return joinPairs(head, pairs.filter(p => p.k !== '$' + op.var));
+    }
+    case 'replace': {
+      const segs = pathSegs(op.path); const key = segs.shift();
+      if (key[0] === '$') fail('replace works on data keys; to change a variable\'s value use bind');
+      if (key[0] === '~') fail('replace works on data keys; to change meta use meta');
+      const list = tree.parsed.items[key]; if (!list) fail('this address has no ' + key + '=');
+      if (tree.parsed.mode === 'fn') fail('a function parameter is a plain value; edit it with replace on the whole address');
+      const repl = parse1(String(op.expr), key);
+      let next;
+      if (!segs.length) next = repl;
+      else {
+        if (repl.length !== 1) fail('replace at ' + op.path + ' takes one expression');
+        try { next = editAt(list, segs, (arr, j) => { arr[j] = repl[0]; return arr; }); } catch (e) { fail(op.path + ': ' + e.message); }
+      }
+      return withKey(uri, tree, key, next);
+    }
+    case 'remove': {
+      const segs = pathSegs(op.path); const key = segs.shift();
+      if (key[0] === '$') { if (!pairs.some(p => p.k === key)) fail(key + ' is not bound'); return joinPairs(head, pairs.filter(p => p.k !== key)); }
+      if (key[0] === '~') { if (!pairs.some(p => p.k === key)) fail('there is no ' + key); return joinPairs(head, pairs.filter(p => p.k !== key)); }
+      const list = tree.parsed.items[key]; if (!list) fail('this address has no ' + key + '=');
+      if (!segs.length) return joinPairs(head, pairs.filter(p => p.k !== key));
+      let next;
+      try { next = editAt(list, segs, (arr, j) => { arr.splice(j, 1); return arr; }); } catch (e) { fail(op.path + ': ' + e.message); }
+      return withKey(uri, tree, key, next);
+    }
+    case 'add': {
+      const key = op.key;
+      if (!key || !isDataKey(key)) fail('add needs key, a data key such as order or where');
+      const repl = parse1(String(op.expr), key);
+      const list = tree.parsed.items[key];
+      const listy = tree.parsed.mode === 'sql' ? (CLAUSES[key] && (CLAUSES[key].list || CLAUSES[key].repeat)) : tree.parsed.mode === 'write' ? (WRITE_CLAUSES[tree.parsed.op][key] || {}).list : false;
+      if (list && !listy) fail(key + '= is already set and holds one expression; use replace');
+      return withKey(uri, tree, key, (list || []).map(cloneNode).concat(repl));
+    }
+    case 'annotate': {
+      const on = Array.isArray(op.on) ? op.on : [op.on];
+      if (!on.length || on.some(p => !resolvePointer(tree, p).length)) fail('every pointer in on must resolve to a node; ' + on.filter(p => !resolvePointer(tree, p).length).join(', ') + ' does not');
+      const m = tree.parsed.meta.find(x => x[0] === 'spikes');
+      const rows = m ? (Array.isArray(m[1]) ? m[1].slice() : [m[1]]) : [];
+      const id = op.id || 's' + (rows.length + 1);
+      if (rows.some(r => r && r.id === id)) fail('an annotation ' + id + ' already exists');
+      rows.push({id, on, meaning: op.meaning === undefined ? null : op.meaning, structure: op.structure === undefined ? null : op.structure, environment: op.environment === undefined ? null : op.environment});
+      return setMeta(head, pairs, 'spikes', rows);
+    }
+    case 'meta': {
+      if (!op.key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(op.key)) fail('meta needs key, a name without ~');
+      return setMeta(head, pairs, op.key, op.value);
+    }
+  }
+  throw editError(i, op, 'unknown op. Use bind, unbind, replace, remove, add, annotate or meta');
+}
+function setMeta(head, pairs, key, value) {
+  const rest = pairs.slice(); const at = rest.findIndex(p => p.k === '~' + key);
+  if (value === null || value === undefined) { if (at >= 0) rest.splice(at, 1); return joinPairs(head, rest); }
+  const pair = {k: '~' + key, raw: '~' + key + '=' + metaText(value)};
+  if (at >= 0) rest[at] = pair; else rest.push(pair);
+  return joinPairs(head, rest);
+}
+// Variables a ~intent row requires (Phase C); none in v0.1-style addresses.
+function requiredVars(tree) { return tree.required ? tree.required.map(r => r.name) : []; }
+// opts.pulse (default true) stamps a new ~pulse whose parent is the identity before the edit; opts.at fixes its time.
+function edit(uri, ops, opts) {
+  opts = opts || {};
+  if (!Array.isArray(ops)) ops = [ops];
+  let tree = parseURI(uri);
+  const before = identity(tree);
+  const prev = tree.parsed.meta.find(m => m[0] === 'pulse');
+  let cur = serialize(tree).uri;
+  ops.forEach((op, i) => {
+    const next = applyEdit(cur, tree, op, i);
+    try { tree = parseURI(next); } catch (e) { throw editError(i, op, 'the result would not parse: ' + e.message); }
+    const err = tree.diagnostics.find(d => d.level === 'error');
+    if (err) throw editError(i, op, 'the result would be invalid: ' + err.msg);
+    cur = serialize(tree).uri;
+  });
+  if (opts.pulse !== false) {
+    const step = prev && Array.isArray(prev[1]) && prev[1][0] && Number.isInteger(prev[1][0].step) ? prev[1][0].step + 1 : 1;
+    cur = withPulse(tree, step, opts.at, 0, before);
+    tree = parseURI(cur);
+  }
+  const f = FilterGenerator.filter(cur);
+  if (!f.ok) throw new TcxpError('Edit produced an address that breaks ' + f.rules.filter(r => !r.pass).map(r => r.id).join(', '), 'edit', 'edit');
+  return {uri: cur, tree};
+}
+
+// query(uri, selector) -> [{pointer, kind, label}]. Every pointer resolves with resolvePointer.
+function nodeLabel(n) {
+  if (n.kind === 'operator') return n.op;
+  if (n.kind === 'slot') return '$' + n.name;
+  if (n.kind === 'value') return exprValText(n);
+  return n.name;
+}
+function nodeKindOf(n) { return n.kind === 'slot' ? (n.children.length ? 'variable' : 'gap') : n.kind; }
+function allPointers(tree) {
+  const out = [];
+  Object.entries(tree.parsed.items).forEach(([key, list]) => list.forEach((item, i) => {
+    (function walk(n, path) { out.push({pointer: path, node: n}); (n.children || []).forEach((c, j) => walk(c, path + '/' + j)); })(item, '/' + key + '/' + i);
+  }));
+  return out;
+}
+function query(uri, selector) {
+  const tree = typeof uri === 'string' ? parseURI(uri) : uri;
+  const [what, arg] = String(selector).split(/:(.*)/s);
+  const pick = test => allPointers(tree).filter(x => test(x.node)).map(x => ({pointer: x.pointer, kind: nodeKindOf(x.node), label: nodeLabel(x.node)}));
+  switch (what) {
+    case 'gaps': return pick(n => n.kind === 'slot' && !n.param && !n.children.length).concat(
+      tree.parsed.mode === 'fn' ? pick(n => n.kind === 'slot' && n.param && !n.children.length) : []);
+    case 'variables': return pick(n => n.kind === 'slot');
+    case 'references': return pick(n => n.kind === 'reference' && (arg === undefined || n.name === arg || n.name.split('.').pop() === arg));
+    case 'operators': return pick(n => n.kind === 'operator' && (arg === undefined || n.op === arg));
+    case 'annotations': return tree.spikes.flatMap(sp => sp.targets.filter(t => t.nodes.length).map(t => ({pointer: t.ptr, kind: 'annotation', label: sp.id + ' · ' + sp.bits})));
+    case 'pointer': return resolvePointer(tree, arg).map(n => ({pointer: arg, kind: nodeKindOf(n), label: nodeLabel(n)}));
+  }
+  throw new TcxpError('Unknown selector "' + selector + '". Use gaps, variables, references, references:<name>, operators:<op>, annotations or pointer:<path>', 'query');
+}
+
+// fromJSON: the inverse of toJSON. It rebuilds the address from the tree, profile and meta alone.
+function fromJSON(j) {
+  const head = (j.call ? CALL : '') + SCHEME + j.registry + '/' + j.path;
+  const pairs = [], binds = [], seen = new Set();
+  const jt = n => n.kind === 'value' ? exprValText(n) : n.kind === 'slot' ? '$' + n.name : n.kind === 'reference' ? n.name : n.op + '(' + (n.children || []).map(jt).join(',') + ')';
+  const callText = c => { const [h, ...params] = c.children; return CALL + SCHEME + h.name + (params.filter(p => p.children).length ? '?' + params.filter(p => p.children).map(p => p.name + '=' + encLiteral(String(p.children[0].value))).join('&') : ''); };
+  (function collect(n) {
+    if (n.kind === 'slot' && !n.param && n.children && !seen.has(n.name)) {
+      seen.add(n.name); const b = n.children[0];
+      binds.push('$' + n.name + '=' + (b.kind === 'operator' && b.op === 'call' ? callText(b).replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23') : jt(b)));
+      return;
+    }
+    (n.children || []).forEach(collect);
+  })(j.profile === 'fn' ? {children: []} : j.tree);   // a function's parameter slots are keys, not $bindings
+  const clause = c => c.op.slice('clause:'.length);
+  if (j.profile === 'sql' || j.profile === 'write') j.tree.children.forEach(c => {
+    if (c.op.startsWith('clause:')) pairs.push(clause(c) + '=' + c.children.map(jt).join(','));
+    else pairs.push('join=' + jt(c));
+  });
+  else if (j.profile === 'math') pairs.push('expr=' + jt(j.tree));
+  else if (j.profile === 'fn') j.tree.children.slice(1).forEach(p => { if (p.children) pairs.push(p.name + '=' + encLiteral(String(p.children[0].value))); });
+  const meta = Object.entries(j.meta || {}).map(([k, v]) => '~' + k + '=' + metaText(v));
+  const all = pairs.concat(binds, meta);
+  return parseURI(head + (all.length ? '?' + all.join('&') : ''));
+}
+
+// registerCSV: a CSV as a table that sql/select and writes can use. Types are inferred (integer, numeric,
+// date, text) unless given as {column: type}. CSV rows have no identity of their own, so the table gets a
+// row_id integer PRIMARY KEY (1..n) as its first column; that keeps write inverses exact when rows repeat.
+function parseCSVText(text) {
+  const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (c === '"') q = false; else cell += c; continue; }
+    if (c === '"') q = true; else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += c;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim() !== ''));
+}
+function registerCSV(registry, table, csvText, types) {
+  if (!/^[a-z_][a-z0-9_]*$/.test(table)) throw new TcxpError('Table name "' + table + '" must be lower case letters, digits and _');
+  const rows = parseCSVText(String(csvText).trim());
+  if (rows.length < 2) throw new TcxpError('The CSV needs a header row and at least one data row');
+  const header = rows[0].map(h => h.trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'col');
+  if (new Set(header).size !== header.length || header.includes('row_id')) throw new TcxpError('CSV column names must be distinct and not row_id');
+  const body = rows.slice(1).map((r, n) => { if (r.length > header.length) throw new TcxpError('CSV row ' + (n + 2) + ' has more cells than the header'); return header.map((_, i) => r[i] === undefined ? '' : r[i].trim()); });
+  const given = types || {};
+  const colTypes = header.map((h, i) => {
+    if (given[h]) return given[h];
+    const vals = body.map(r => r[i]).filter(v => v !== '');
+    if (vals.length && vals.every(v => /^-?\d+$/.test(v))) return 'integer';
+    if (vals.length && vals.every(v => /^-?\d+(\.\d+)?$/.test(v))) return 'numeric';
+    if (vals.length && vals.every(v => isValidDate(v))) return 'date';
+    return 'text';
+  });
+  const seed = body.map((r, n) => [n + 1].concat(r.map((v, i) => {
+    if (v === '') return null;
+    const b = baseType(colTypes[i]);
+    if (['integer', 'bigint', 'smallint', 'numeric'].includes(b)) { const x = Number(v); if (Number.isNaN(x)) throw new TcxpError('CSV row ' + (n + 2) + ', column ' + header[i] + ': "' + v + '" is not a number'); return x; }
+    if (b === 'date' && !isValidDate(v)) throw new TcxpError('CSV row ' + (n + 2) + ', column ' + header[i] + ': "' + v + '" is not a date (YYYY-MM-DD)');
+    return v;
+  })));
+  const reg = REGISTRIES[registry] || (REGISTRIES[registry] = {title: registry, description: 'Registry with data loaded from CSV.', fns: {}, notes: {}});
+  if (!reg.db) reg.db = {schema: {name: registry, description: 'Tables loaded from CSV files.', tables: []}, seed: {}};
+  const def = {name: table, description: 'Loaded from CSV (' + seed.length + ' rows). row_id numbers the rows in file order.',
+    columns: [['row_id', 'integer', 'PRIMARY KEY', 'Row number in the file, 1 to n.']].concat(header.map((h, i) => [h, colTypes[i], '', 'CSV column "' + rows[0][i].trim() + '".']))};
+  reg.db.schema.tables = reg.db.schema.tables.filter(t => t.name !== table).concat([def]);
+  reg.db.seed[table] = seed;
+  delete STORE.tables[registry + '/' + table];
+  return def;
+}
+
 /* ------------------------------------------------------- pulse */
 // Each committed state gets one ~pulse row: {step, at, debounce_ms, parent}. Step counts commits, not keystrokes.
 // parent is the identity of the previous committed state (null for the first), so pulses form a chain.
@@ -1852,7 +2148,7 @@ const DEBOUNCE_MS = 300;
 // extra adds fields to the row, e.g. {undo: [inverse addresses]} for an executed write.
 function withPulse(tree, step, at, debounce, parent, extra) {
   const meta = tree.parsed.meta.filter(m => m[0] !== 'pulse');
-  meta.unshift(['pulse', [Object.assign({step, at: at || new Date().toISOString(), debounce_ms: debounce || DEBOUNCE_MS, parent: parent || null}, extra || {})]]);
+  meta.unshift(['pulse', [Object.assign({step, at: at || new Date().toISOString(), debounce_ms: debounce === undefined || debounce === null ? DEBOUNCE_MS : debounce, parent: parent || null}, extra || {})]]);
   const t = Object.assign({}, tree, {parsed: Object.assign({}, tree.parsed, {meta})});
   return serialize(t).uri;
 }
@@ -1870,6 +2166,9 @@ const RULES = [
 function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const PHRASES = ['How many hours did we bill?', 'Is the route safe?', 'Who joined in August?', 'Q3 revenue & margin', 'Ticket #42 follow-up', 'Discount of 15% applied', 'Check the roster before Friday'];
 const WORDS = ['world', 'team', 'Ada', 'café', 'R&D', 'issue #7', '100%', 'a b'];
+// The read stream draws only on the registries v0.1 shipped, so a seed gives the same addresses whatever
+// registries are added later (client.demo, registerCSV tables). test/compat.mjs checks the stream itself.
+const READ_REGISTRIES = ['school.demo', 'firm.demo', 'fleet.demo', 'registry'];
 
 class FilterGenerator {
   constructor(seed) { this.seed = seed === undefined ? 1 : seed; this.rand = mulberry32(this.seed); this.count = 0; }
@@ -1993,7 +2292,7 @@ class FilterGenerator {
     const r = this.rand();
     const expr = r < 0.2 ? arith(3) : r < 0.4 ? this.pick(['and', 'or']) + '(' + cmpx() + ',' + cmpx() + ')' : cmpx();
     const binds = {}; vars.forEach(v => { if (this.chance(0.85)) binds[v] = String(this.int(11) - 5); });
-    const reg = this.pick(Object.keys(REGISTRIES));
+    const reg = this.pick(READ_REGISTRIES);
     return this.withBindings('!tcxp:/' + reg + '/math/eval?expr=' + expr, binds);
   }
   call() {
@@ -2089,7 +2388,7 @@ class FilterGenerator {
   }
   meta(tree) {
     const parts = [];
-    const notes = []; Object.entries(REGISTRIES).forEach(([r, reg]) => Object.keys(reg.notes).forEach(n => notes.push('!tcxp:/' + r + '/' + n)));
+    const notes = []; READ_REGISTRIES.forEach(r => Object.keys(REGISTRIES[r].notes).forEach(n => notes.push('!tcxp:/' + r + '/' + n)));
     if (this.chance(0.6)) parts.push('~pulse=' + metaText([{step: 1 + this.int(500), at: new Date(Date.UTC(2026, 9, 1 + this.int(28), this.int(24), this.int(60), this.int(60), this.int(1000))).toISOString(), debounce_ms: DEBOUNCE_MS}]));
     if (this.chance(0.5)) parts.push('~intent=' + metaText(this.pick(PHRASES)));
     if (this.chance(0.5)) {
@@ -2172,9 +2471,40 @@ const COVERAGE = [
   ['Calls','Calls with arguments nested inside expressions','no',null]
 ];
 
+/* ------------------------------------------------------------- CSV data (v0.2) */
+// client.demo: a client's own file of work hours, loaded with registerCSV. The same rows as the tax intake
+// demo's sample file, so the two agree: US hours in calendar 2024 = 59.25.
+const CLIENT_CSV = `employee,date,hours,work_country
+Ana Ruiz,2024-02-12,5,US
+Ana Ruiz,2024-03-11,8,US
+Ana Ruiz,2024-05-20,6.5,US
+Ben Carter,2024-06-03,7,US
+Chen Wei,2024-06-10,8,CA
+Divya Rao,2024-04-15,7.5,IN
+Ana Ruiz,2024-08-05,8,US
+Ben Carter,2024-09-16,8,US
+Chen Wei,2024-10-07,6,US
+Erik Lund,2024-11-12,5,DE
+Fatima Noor,2024-12-02,7.25,US
+Fatima Noor,2024-12-30,3.5,US
+Ana Ruiz,2025-01-13,8,US
+Ben Carter,2025-02-24,4,US
+Divya Rao,2025-03-10,8,US
+Fatima Noor,2025-04-21,6,US
+Erik Lund,2025-05-05,8,DE
+Chen Wei,2025-06-16,7,CA
+Ana Ruiz,2025-07-14,8,US
+Ben Carter,2025-08-18,7.5,US
+Fatima Noor,2025-09-08,8,US
+Divya Rao,2025-09-22,6,IN`;
+REGISTRIES['client.demo'] = {title: 'Client file', description: 'A client CSV of work hours, loaded with registerCSV.', fns: {},
+  notes: {'rules/tax-year': 'Before submitting, the user must state the tax year they are referencing.'}};
+registerCSV('client.demo', 'client_hours', CLIENT_CSV, {hours: 'numeric(6,2)'});
+
 const api = {REGISTRIES, QUERIES, GROUPS, OPS, CLAUSES, CLAUSE_ORDER, COVERAGE, FACETS, SCHEME, DEBOUNCE_MS,
   parseURI, serialize, identity, strictForm, resolvePointer, toSQL, toMath, toJSON, execute, withPulse,
   newStore, resetData, dataChanged, tableRows, WRITE_CLAUSES, WRITE_ORDER,
+  edit, query, fromJSON, registerCSV, exprText,
   fullDDL, tableDDL, tableInserts, TcxpError, baseType, findSlot, FilterGenerator, RULES};
 root.TCXP = api;
 if (typeof module !== 'undefined') module.exports = api;
@@ -2182,7 +2512,7 @@ if (typeof module !== 'undefined') module.exports = api;
 
 </script>
 <script>
-window.TCXP_SNAPSHOT = {"engine":"PostgreSQL 18.3 (PGlite 0.5.8) on wasm32-unknown-emscripten, compiled by emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 3.1.74 (1092ec30a3fb1d46b1782ff1b4db5094d3d06ae5), 32-bit","results":{"!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[2,"Diego","Alvarez","diego.alvarez@school.demo","2026-fall",3.78,"2026-08-14"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[6,"Luca","Rossi","luca.rossi@school.demo","2026-fall",3.67,"2026-09-02"],[8,"Noah","Kim","noah.kim@school.demo","2026-fall",2.95,"2026-08-28"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"],[12,"Oliver","Grant","oliver.grant@school.demo","2026-fall",3.71,"2026-09-05"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=first_name,last_name,gpa&from=students&where=ge(gpa,$min_gpa)&order=desc(gpa)&limit=$top&$min_gpa=3.5&$top=5":{"kind":"rows","columns":["first_name","last_name","gpa"],"rows":[["Amara","Diallo",3.95],["Maya","Chen",3.92],["Samuel","Okafor",3.88],["Diego","Alvarez",3.78],["Oliver","Grant",3.71]],"ordered":true},"!tcxp:/school.demo/sql/select?cols=student_id,email,enrolled_on&from=students&where=between(enrolled_on,$start,$end)&order=asc(enrolled_on)&$start=date'2026-08-01'&$end=date'2026-08-31'":{"kind":"rows","columns":["student_id","email","enrolled_on"],"rows":[[10,"ethan.brooks@school.demo","2026-08-05"],[1,"maya.chen@school.demo","2026-08-12"],[2,"diego.alvarez@school.demo","2026-08-14"],[4,"samuel.okafor@school.demo","2026-08-20"],[8,"noah.kim@school.demo","2026-08-28"]],"ordered":true},"!tcxp:/school.demo/sql/select?cols=*&from=submissions&where=and(ge(submitted_at,$since),isnull(score))&$since=date'2026-09-15'":{"kind":"rows","columns":["submission_id","assignment_id","student_id","submitted_at","score","status"],"rows":[[6,2,1,"2026-09-25T17:00:00.000Z",null,"on_time"],[7,2,2,"2026-09-27T09:12:00.000Z",null,"late"],[8,2,6,"2026-09-26T22:58:00.000Z",null,"on_time"],[15,5,1,"2026-09-29T20:10:00.000Z",null,"on_time"],[16,5,10,"2026-09-30T14:00:00.000Z",null,"late"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=assignment_id,as(round(avg(score),1),avg_score),as(count(*),n)&from=submissions&group=assignment_id&having=ge(count(*),$min_n)&order=desc(avg_score)&$min_n=3":{"kind":"rows","columns":["assignment_id","avg_score","n"],"rows":[[2,null,3],[4,86,5],[1,77.2,6],[6,17,4]],"ordered":true},"!tcxp:/school.demo/sql/select?cols=submission_id,student_id,score,status&from=submissions&where=and(in(status,'late','resubmitted'),lt(score,$threshold))&$threshold=70":{"kind":"rows","columns":["submission_id","student_id","score","status"],"rows":[[3,4,64,"late"],[5,12,58,"late"],[18,12,12,"late"],[20,12,66,"resubmitted"],[21,2,38,"late"],[22,7,20,"resubmitted"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'":{"kind":"rows","columns":["first_name","last_name","title"],"rows":[["Maya","Chen","Intro to Programming"],["Diego","Alvarez","Intro to Programming"],["Samuel","Okafor","Intro to Programming"],["Luca","Rossi","Intro to Programming"],["Noah","Kim","Intro to Programming"],["Oliver","Grant","Intro to Programming"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)":{"kind":"rows","columns":["student_id","email"],"rows":[[11,"leila.haddad@school.demo"],[5,"hannah.weiss@school.demo"],[8,"noah.kim@school.demo"],[9,"sofia.petrov@school.demo"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))":{"kind":"rows","columns":["code","title"],"rows":[[null,"Ethics in data"],[null,"Capstone proposal template"],["HCI150",null]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=courses.department,as(count(enrollments.enrollment_id),enrolled)&from=courses&join=left(enrollments,and(eq(enrollments.course_id,courses.course_id),eq(enrollments.status,$status)))&group=courses.department&order=desc(enrolled),asc(courses.department)&$status='active'":{"kind":"rows","columns":["department","enrolled"],"rows":[["CS",7],["MATH",4],["DS",3]],"ordered":true},"@!tcxp:/registry/hello?do=world":{"kind":"call","value":"hello, world"},"!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[2,"Diego","Alvarez","diego.alvarez@school.demo","2026-fall",3.78,"2026-08-14"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[6,"Luca","Rossi","luca.rossi@school.demo","2026-fall",3.67,"2026-09-02"],[8,"Noah","Kim","noah.kim@school.demo","2026-fall",2.95,"2026-08-28"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"],[12,"Oliver","Grant","oliver.grant@school.demo","2026-fall",3.71,"2026-09-05"]],"ordered":false},"!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)":{"kind":"gap","gaps":["x"]},"!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3":{"kind":"value","value":true},"!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29":{"kind":"gap","gaps":["freezing_point"]},"!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=28.6":{"kind":"value","value":false},"!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=31.3":{"kind":"value","value":true},"!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))":{"kind":"gap","gaps":["tax_year"]},"!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&$tax_year=2024":{"kind":"rows","columns":["us_hours"],"rows":[[59.25]],"ordered":false},"!tcxp:/firm.demo/sql/select?cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'":{"kind":"rows","columns":["calendar_year","fiscal_year","us_hours"],"rows":[[2024,2024,26.5],[2024,2025,32.75],[2025,2025,26],[2025,2026,23.5]],"ordered":true},"!tcxp:/school.demo/sql/insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3":{"kind":"write","count":1,"columns":["course_id","code","title","department","credits"],"rows":[[6,"DS310","Data Visualization","DS",3]]},"@!tcxp:/school.demo/sql/insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3":{"kind":"write","count":1,"columns":["course_id","code","title","department","credits"],"rows":[[6,"DS310","Data Visualization","DS",3]]},"!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,$student,1,$today,'active'),row(22,$student,3,$today,'active')&returning=enrollment_id,course_id&$student=5&$today=date'2026-10-04'":{"kind":"write","count":2,"columns":["enrollment_id","course_id"],"rows":[[21,1],[22,3]]},"@!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,$student,1,$today,'active'),row(22,$student,3,$today,'active')&returning=enrollment_id,course_id&$student=5&$today=date'2026-10-04'":{"kind":"write","count":2,"columns":["enrollment_id","course_id"],"rows":[[21,1],[22,3]]},"!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8":{"kind":"write","count":1,"columns":["student_id","first_name","gpa"],"rows":[[8,"Noah",3.15]]},"@!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8":{"kind":"write","count":1,"columns":["student_id","first_name","gpa"],"rows":[[8,"Noah",3.15]]},"!tcxp:/school.demo/sql/update?table=students&set=assign(cohort,$cohort)&where=eq(student_id,3)&returning=student_id,cohort&$cohort=@!tcxp:/school.demo/fn/current_cohort":{"kind":"write","count":1,"columns":["student_id","cohort"],"rows":[[3,"2026-fall"]]},"@!tcxp:/school.demo/sql/update?table=students&set=assign(cohort,$cohort)&where=eq(student_id,3)&returning=student_id,cohort&$cohort=@!tcxp:/school.demo/fn/current_cohort":{"kind":"write","count":1,"columns":["student_id","cohort"],"rows":[[3,"2026-fall"]]},"!tcxp:/school.demo/sql/delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60":{"kind":"write","count":3,"columns":["submission_id","score"],"rows":[[5,58],[18,12],[21,38]]},"@!tcxp:/school.demo/sql/delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60":{"kind":"write","count":3,"columns":["submission_id","score"],"rows":[[5,58],[18,12],[21,38]]},"!tcxp:/firm.demo/sql/update?table=work_logs&set=assign(hours,add(hours,$extra))&where=eq(log_id,2)&returning=log_id,hours&$extra=0.5":{"kind":"write","count":1,"columns":["log_id","hours"],"rows":[[2,7]]},"@!tcxp:/firm.demo/sql/update?table=work_logs&set=assign(hours,add(hours,$extra))&where=eq(log_id,2)&returning=log_id,hours&$extra=0.5":{"kind":"write","count":1,"columns":["log_id","hours"],"rows":[[2,7]]},"!tcxp:/school.demo/sql/delete?from=submissions&where=true&returning=submission_id":{"kind":"write","count":22,"columns":["submission_id"],"rows":[[1],[2],[3],[4],[5],[6],[7],[8],[9],[10],[11],[12],[13],[14],[15],[16],[17],[18],[19],[20],[21],[22]]},"@!tcxp:/school.demo/sql/delete?from=submissions&where=true&returning=submission_id":{"kind":"write","count":22,"columns":["submission_id"],"rows":[[1],[2],[3],[4],[5],[6],[7],[8],[9],[10],[11],[12],[13],[14],[15],[16],[17],[18],[19],[20],[21],[22]]},"!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,1)":{"kind":"gap","gaps":["gpa"]},"@!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,1)":{"kind":"gap","gaps":["gpa"]},"!tcxp:/school.demo/sql/delete?from=submissions":{"kind":"error","code":"refused"},"@!tcxp:/school.demo/sql/delete?from=submissions":{"kind":"error","code":"refused"},"!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')":{"kind":"error","code":"23503"},"@!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')":{"kind":"error","code":"23503"},"!tcxp:/school.demo/sql/select?cols=first_name,gpa&from=students":{"kind":"rows","columns":["first_name","gpa"],"rows":[["Maya",3.92],["Diego",3.78],["Priya",3.55],["Samuel",3.88],["Hannah",3.1],["Luca",3.67],["Amara",3.95],["Noah",2.95],["Sofia",3.4],["Ethan",3.2],["Leila",2.8],["Oliver",3.71]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[2,"Diego","Alvarez","diego.alvarez@school.demo","2026-fall",3.78,"2026-08-14"],[3,"Priya","Nair","priya.nair@school.demo","2026-spring",3.55,"2026-01-10"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[5,"Hannah","Weiss","hannah.weiss@school.demo","2025-fall",3.1,"2025-08-18"],[6,"Luca","Rossi","luca.rossi@school.demo","2026-fall",3.67,"2026-09-02"],[7,"Amara","Diallo","amara.diallo@school.demo","2026-spring",3.95,"2026-01-08"],[8,"Noah","Kim","noah.kim@school.demo","2026-fall",2.95,"2026-08-28"],[9,"Sofia","Petrov","sofia.petrov@school.demo","2025-fall",3.4,"2025-08-22"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"],[11,"Leila","Haddad","leila.haddad@school.demo","2026-spring",2.8,"2026-01-15"],[12,"Oliver","Grant","oliver.grant@school.demo","2026-fall",3.71,"2026-09-05"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=as(gpa,grade)&from=students":{"kind":"rows","columns":["grade"],"rows":[[3.92],[3.78],[3.55],[3.88],[3.1],[3.67],[3.95],[2.95],[3.4],[3.2],[2.8],[3.71]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=courses":{"kind":"rows","columns":["course_id","code","title","department","credits"],"rows":[[1,"CS101","Intro to Programming","CS",4],[2,"MATH140","Discrete Mathematics","MATH",3],[3,"DS210","Data Engineering Foundations","DS",4],[4,"STAT200","Applied Statistics","MATH",3],[5,"HCI150","Human-Computer Interaction","CS",3]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students&where=and(ge(gpa,3),ne(cohort,$c),lt(gpa,4))&$c='2025-fall'":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[2,"Diego","Alvarez","diego.alvarez@school.demo","2026-fall",3.78,"2026-08-14"],[3,"Priya","Nair","priya.nair@school.demo","2026-spring",3.55,"2026-01-10"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[6,"Luca","Rossi","luca.rossi@school.demo","2026-fall",3.67,"2026-09-02"],[7,"Amara","Diallo","amara.diallo@school.demo","2026-spring",3.95,"2026-01-08"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"],[12,"Oliver","Grant","oliver.grant@school.demo","2026-fall",3.71,"2026-09-05"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students&where=or(not(eq(cohort,'2026-fall')),gt(gpa,3.9))":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[3,"Priya","Nair","priya.nair@school.demo","2026-spring",3.55,"2026-01-10"],[5,"Hannah","Weiss","hannah.weiss@school.demo","2025-fall",3.1,"2025-08-18"],[7,"Amara","Diallo","amara.diallo@school.demo","2026-spring",3.95,"2026-01-08"],[9,"Sofia","Petrov","sofia.petrov@school.demo","2025-fall",3.4,"2025-08-22"],[11,"Leila","Haddad","leila.haddad@school.demo","2026-spring",2.8,"2026-01-15"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=courses&where=in(department,'CS','DS')":{"kind":"rows","columns":["course_id","code","title","department","credits"],"rows":[[1,"CS101","Intro to Programming","CS",4],[3,"DS210","Data Engineering Foundations","DS",4],[5,"HCI150","Human-Computer Interaction","CS",3]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students&where=between(gpa,3,3.5)":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[5,"Hannah","Weiss","hannah.weiss@school.demo","2025-fall",3.1,"2025-08-18"],[9,"Sofia","Petrov","sofia.petrov@school.demo","2025-fall",3.4,"2025-08-22"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students&where=ilike(email,$pat)&$pat='%25chen%25'":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=assignments&where=notnull(course_id)":{"kind":"rows","columns":["assignment_id","course_id","title","max_points","due_on"],"rows":[[1,1,"Variables and types",100,"2026-09-12"],[2,1,"Control flow",100,"2026-09-26"],[3,2,"Proof techniques",50,"2026-09-19"],[4,3,"Schema design",100,"2026-09-15"],[5,3,"SQL joins lab",100,"2026-09-29"],[6,4,"Sampling quiz",20,"2026-09-18"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=title,as(div(max_points,10),tenth)&from=assignments":{"kind":"rows","columns":["title","tenth"],"rows":[["Variables and types",10],["Control flow",10],["Proof techniques",5],["Schema design",10],["SQL joins lab",10],["Sampling quiz",2],["Ethics in data",5],["Capstone proposal template",10]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=upper(code),coalesce(due_on,date'2026-12-31')&from=courses&join=left(assignments,eq(assignments.course_id,courses.course_id))":{"kind":"rows","columns":["upper","coalesce"],"rows":[["CS101","2026-09-12"],["CS101","2026-09-26"],["MATH140","2026-09-19"],["DS210","2026-09-15"],["DS210","2026-09-29"],["STAT200","2026-09-18"],["HCI150","2026-12-31"]],"ordered":false},"!tcxp:/firm.demo/sql/select?cols=year(worked_on),count(*)&from=work_logs&group=year(worked_on)":{"kind":"rows","columns":["extract","count"],"rows":[[2025,10],[2024,12]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=count(*),avg(gpa),min(gpa),max(gpa),sum(gpa)&from=students":{"kind":"rows","columns":["count","avg","min","max","sum"],"rows":[[12,3.4925,2.8,3.95,41.91]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort":{"kind":"rows","columns":["cohort","count"],"rows":[["2026-spring",3],["2026-fall",7],["2025-fall",2]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort&having=gt(count(*),2)":{"kind":"rows","columns":["cohort","count"],"rows":[["2026-spring",3],["2026-fall",7]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students&order=desc(gpa),asc(last_name)":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[7,"Amara","Diallo","amara.diallo@school.demo","2026-spring",3.95,"2026-01-08"],[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[2,"Diego","Alvarez","diego.alvarez@school.demo","2026-fall",3.78,"2026-08-14"],[12,"Oliver","Grant","oliver.grant@school.demo","2026-fall",3.71,"2026-09-05"],[6,"Luca","Rossi","luca.rossi@school.demo","2026-fall",3.67,"2026-09-02"],[3,"Priya","Nair","priya.nair@school.demo","2026-spring",3.55,"2026-01-10"],[9,"Sofia","Petrov","sofia.petrov@school.demo","2025-fall",3.4,"2025-08-22"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"],[5,"Hannah","Weiss","hannah.weiss@school.demo","2025-fall",3.1,"2025-08-18"],[8,"Noah","Kim","noah.kim@school.demo","2026-fall",2.95,"2026-08-28"],[11,"Leila","Haddad","leila.haddad@school.demo","2026-spring",2.8,"2026-01-15"]],"ordered":true},"!tcxp:/school.demo/sql/select?cols=*&from=students&order=asc(student_id)&limit=$n&offset=2&$n=3":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[3,"Priya","Nair","priya.nair@school.demo","2026-spring",3.55,"2026-01-10"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[5,"Hannah","Weiss","hannah.weiss@school.demo","2025-fall",3.1,"2025-08-18"]],"ordered":true},"!tcxp:/school.demo/sql/select?cols=courses.code,enrollments.status&from=enrollments&join=right(courses,eq(courses.course_id,enrollments.course_id))":{"kind":"rows","columns":["code","status"],"rows":[["CS101","active"],["DS210","active"],["CS101","active"],["MATH140","dropped"],["DS210","completed"],["STAT200","active"],["CS101","active"],["DS210","active"],["MATH140","completed"],["CS101","active"],["HCI150","active"],["DS210","completed"],["STAT200","active"],["CS101","active"],["STAT200","completed"],["MATH140","active"],["DS210","active"],["HCI150","dropped"],["CS101","active"],["STAT200","active"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=courses.code,students.cohort&from=courses&join=cross(students)":{"kind":"rows","columns":["code","cohort"],"rows":[["CS101","2026-fall"],["CS101","2026-fall"],["CS101","2026-spring"],["CS101","2026-fall"],["CS101","2025-fall"],["CS101","2026-fall"],["CS101","2026-spring"],["CS101","2026-fall"],["CS101","2025-fall"],["CS101","2026-fall"],["CS101","2026-spring"],["CS101","2026-fall"],["MATH140","2026-fall"],["MATH140","2026-fall"],["MATH140","2026-spring"],["MATH140","2026-fall"],["MATH140","2025-fall"],["MATH140","2026-fall"],["MATH140","2026-spring"],["MATH140","2026-fall"],["MATH140","2025-fall"],["MATH140","2026-fall"],["MATH140","2026-spring"],["MATH140","2026-fall"],["DS210","2026-fall"],["DS210","2026-fall"],["DS210","2026-spring"],["DS210","2026-fall"],["DS210","2025-fall"],["DS210","2026-fall"],["DS210","2026-spring"],["DS210","2026-fall"],["DS210","2025-fall"],["DS210","2026-fall"],["DS210","2026-spring"],["DS210","2026-fall"],["STAT200","2026-fall"],["STAT200","2026-fall"],["STAT200","2026-spring"],["STAT200","2026-fall"],["STAT200","2025-fall"],["STAT200","2026-fall"],["STAT200","2026-spring"],["STAT200","2026-fall"],["STAT200","2025-fall"],["STAT200","2026-fall"],["STAT200","2026-spring"],["STAT200","2026-fall"],["HCI150","2026-fall"],["HCI150","2026-fall"],["HCI150","2026-spring"],["HCI150","2026-fall"],["HCI150","2025-fall"],["HCI150","2026-fall"],["HCI150","2026-spring"],["HCI150","2026-fall"],["HCI150","2025-fall"],["HCI150","2026-fall"],["HCI150","2026-spring"],["HCI150","2026-fall"]],"ordered":false}}};
+window.TCXP_SNAPSHOT = {"engine":"PostgreSQL 18.3 (PGlite 0.5.8) on wasm32-unknown-emscripten, compiled by emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 3.1.74 (1092ec30a3fb1d46b1782ff1b4db5094d3d06ae5), 32-bit","results":{"!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[2,"Diego","Alvarez","diego.alvarez@school.demo","2026-fall",3.78,"2026-08-14"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[6,"Luca","Rossi","luca.rossi@school.demo","2026-fall",3.67,"2026-09-02"],[8,"Noah","Kim","noah.kim@school.demo","2026-fall",2.95,"2026-08-28"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"],[12,"Oliver","Grant","oliver.grant@school.demo","2026-fall",3.71,"2026-09-05"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=first_name,last_name,gpa&from=students&where=ge(gpa,$min_gpa)&order=desc(gpa)&limit=$top&$min_gpa=3.5&$top=5":{"kind":"rows","columns":["first_name","last_name","gpa"],"rows":[["Amara","Diallo",3.95],["Maya","Chen",3.92],["Samuel","Okafor",3.88],["Diego","Alvarez",3.78],["Oliver","Grant",3.71]],"ordered":true},"!tcxp:/school.demo/sql/select?cols=student_id,email,enrolled_on&from=students&where=between(enrolled_on,$start,$end)&order=asc(enrolled_on)&$start=date'2026-08-01'&$end=date'2026-08-31'":{"kind":"rows","columns":["student_id","email","enrolled_on"],"rows":[[10,"ethan.brooks@school.demo","2026-08-05"],[1,"maya.chen@school.demo","2026-08-12"],[2,"diego.alvarez@school.demo","2026-08-14"],[4,"samuel.okafor@school.demo","2026-08-20"],[8,"noah.kim@school.demo","2026-08-28"]],"ordered":true},"!tcxp:/school.demo/sql/select?cols=*&from=submissions&where=and(ge(submitted_at,$since),isnull(score))&$since=date'2026-09-15'":{"kind":"rows","columns":["submission_id","assignment_id","student_id","submitted_at","score","status"],"rows":[[6,2,1,"2026-09-25T17:00:00.000Z",null,"on_time"],[7,2,2,"2026-09-27T09:12:00.000Z",null,"late"],[8,2,6,"2026-09-26T22:58:00.000Z",null,"on_time"],[15,5,1,"2026-09-29T20:10:00.000Z",null,"on_time"],[16,5,10,"2026-09-30T14:00:00.000Z",null,"late"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=assignment_id,as(round(avg(score),1),avg_score),as(count(*),n)&from=submissions&group=assignment_id&having=ge(count(*),$min_n)&order=desc(avg_score)&$min_n=3":{"kind":"rows","columns":["assignment_id","avg_score","n"],"rows":[[2,null,3],[4,86,5],[1,77.2,6],[6,17,4]],"ordered":true},"!tcxp:/school.demo/sql/select?cols=submission_id,student_id,score,status&from=submissions&where=and(in(status,'late','resubmitted'),lt(score,$threshold))&$threshold=70":{"kind":"rows","columns":["submission_id","student_id","score","status"],"rows":[[3,4,64,"late"],[5,12,58,"late"],[18,12,12,"late"],[20,12,66,"resubmitted"],[21,2,38,"late"],[22,7,20,"resubmitted"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'":{"kind":"rows","columns":["first_name","last_name","title"],"rows":[["Maya","Chen","Intro to Programming"],["Diego","Alvarez","Intro to Programming"],["Samuel","Okafor","Intro to Programming"],["Luca","Rossi","Intro to Programming"],["Noah","Kim","Intro to Programming"],["Oliver","Grant","Intro to Programming"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)":{"kind":"rows","columns":["student_id","email"],"rows":[[11,"leila.haddad@school.demo"],[5,"hannah.weiss@school.demo"],[8,"noah.kim@school.demo"],[9,"sofia.petrov@school.demo"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))":{"kind":"rows","columns":["code","title"],"rows":[[null,"Ethics in data"],[null,"Capstone proposal template"],["HCI150",null]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=courses.department,as(count(enrollments.enrollment_id),enrolled)&from=courses&join=left(enrollments,and(eq(enrollments.course_id,courses.course_id),eq(enrollments.status,$status)))&group=courses.department&order=desc(enrolled),asc(courses.department)&$status='active'":{"kind":"rows","columns":["department","enrolled"],"rows":[["CS",7],["MATH",4],["DS",3]],"ordered":true},"@!tcxp:/registry/hello?do=world":{"kind":"call","value":"hello, world"},"!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[2,"Diego","Alvarez","diego.alvarez@school.demo","2026-fall",3.78,"2026-08-14"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[6,"Luca","Rossi","luca.rossi@school.demo","2026-fall",3.67,"2026-09-02"],[8,"Noah","Kim","noah.kim@school.demo","2026-fall",2.95,"2026-08-28"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"],[12,"Oliver","Grant","oliver.grant@school.demo","2026-fall",3.71,"2026-09-05"]],"ordered":false},"!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)":{"kind":"gap","gaps":["x"]},"!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3":{"kind":"value","value":true},"!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29":{"kind":"gap","gaps":["freezing_point"]},"!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=28.6":{"kind":"value","value":false},"!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=31.3":{"kind":"value","value":true},"!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))":{"kind":"gap","gaps":["tax_year"]},"!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&$tax_year=2024":{"kind":"rows","columns":["us_hours"],"rows":[[59.25]],"ordered":false},"!tcxp:/firm.demo/sql/select?cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'":{"kind":"rows","columns":["calendar_year","fiscal_year","us_hours"],"rows":[[2024,2024,26.5],[2024,2025,32.75],[2025,2025,26],[2025,2026,23.5]],"ordered":true},"!tcxp:/school.demo/sql/insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3":{"kind":"write","count":1,"columns":["course_id","code","title","department","credits"],"rows":[[6,"DS310","Data Visualization","DS",3]]},"@!tcxp:/school.demo/sql/insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3":{"kind":"write","count":1,"columns":["course_id","code","title","department","credits"],"rows":[[6,"DS310","Data Visualization","DS",3]]},"!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,$student,1,$today,'active'),row(22,$student,3,$today,'active')&returning=enrollment_id,course_id&$student=5&$today=date'2026-10-04'":{"kind":"write","count":2,"columns":["enrollment_id","course_id"],"rows":[[21,1],[22,3]]},"@!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,$student,1,$today,'active'),row(22,$student,3,$today,'active')&returning=enrollment_id,course_id&$student=5&$today=date'2026-10-04'":{"kind":"write","count":2,"columns":["enrollment_id","course_id"],"rows":[[21,1],[22,3]]},"!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8":{"kind":"write","count":1,"columns":["student_id","first_name","gpa"],"rows":[[8,"Noah",3.15]]},"@!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8":{"kind":"write","count":1,"columns":["student_id","first_name","gpa"],"rows":[[8,"Noah",3.15]]},"!tcxp:/school.demo/sql/update?table=students&set=assign(cohort,$cohort)&where=eq(student_id,3)&returning=student_id,cohort&$cohort=@!tcxp:/school.demo/fn/current_cohort":{"kind":"write","count":1,"columns":["student_id","cohort"],"rows":[[3,"2026-fall"]]},"@!tcxp:/school.demo/sql/update?table=students&set=assign(cohort,$cohort)&where=eq(student_id,3)&returning=student_id,cohort&$cohort=@!tcxp:/school.demo/fn/current_cohort":{"kind":"write","count":1,"columns":["student_id","cohort"],"rows":[[3,"2026-fall"]]},"!tcxp:/school.demo/sql/delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60":{"kind":"write","count":3,"columns":["submission_id","score"],"rows":[[5,58],[18,12],[21,38]]},"@!tcxp:/school.demo/sql/delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60":{"kind":"write","count":3,"columns":["submission_id","score"],"rows":[[5,58],[18,12],[21,38]]},"!tcxp:/firm.demo/sql/update?table=work_logs&set=assign(hours,add(hours,$extra))&where=eq(log_id,2)&returning=log_id,hours&$extra=0.5":{"kind":"write","count":1,"columns":["log_id","hours"],"rows":[[2,7]]},"@!tcxp:/firm.demo/sql/update?table=work_logs&set=assign(hours,add(hours,$extra))&where=eq(log_id,2)&returning=log_id,hours&$extra=0.5":{"kind":"write","count":1,"columns":["log_id","hours"],"rows":[[2,7]]},"!tcxp:/school.demo/sql/delete?from=submissions&where=true&returning=submission_id":{"kind":"write","count":22,"columns":["submission_id"],"rows":[[1],[2],[3],[4],[5],[6],[7],[8],[9],[10],[11],[12],[13],[14],[15],[16],[17],[18],[19],[20],[21],[22]]},"@!tcxp:/school.demo/sql/delete?from=submissions&where=true&returning=submission_id":{"kind":"write","count":22,"columns":["submission_id"],"rows":[[1],[2],[3],[4],[5],[6],[7],[8],[9],[10],[11],[12],[13],[14],[15],[16],[17],[18],[19],[20],[21],[22]]},"!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,1)":{"kind":"gap","gaps":["gpa"]},"@!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,1)":{"kind":"gap","gaps":["gpa"]},"!tcxp:/school.demo/sql/delete?from=submissions":{"kind":"error","code":"refused"},"@!tcxp:/school.demo/sql/delete?from=submissions":{"kind":"error","code":"refused"},"!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')":{"kind":"error","code":"23503"},"@!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')":{"kind":"error","code":"23503"},"!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024":{"kind":"rows","columns":["us_hours"],"rows":[[59.25]],"ordered":false},"!tcxp:/client.demo/sql/select?cols=employee,work_country,as(sum(hours),total_hours),as(count(*),days)&from=client_hours&group=employee,work_country&order=asc(employee),asc(work_country)":{"kind":"rows","columns":["employee","work_country","total_hours","days"],"rows":[["Ana Ruiz","US",43.5,6],["Ben Carter","US",26.5,4],["Chen Wei","CA",15,2],["Chen Wei","US",6,1],["Divya Rao","IN",13.5,2],["Divya Rao","US",8,1],["Erik Lund","DE",13,2],["Fatima Noor","US",24.75,4]],"ordered":true},"!tcxp:/client.demo/sql/insert?into=client_hours&cols=row_id,employee,date,hours,work_country&values=row(23,$who,$day,6,'US')&returning=*&$who='Ana Ruiz'&$day=date'2025-10-01'":{"kind":"write","count":1,"columns":["row_id","employee","date","hours","work_country"],"rows":[[23,"Ana Ruiz","2025-10-01",6,"US"]]},"@!tcxp:/client.demo/sql/insert?into=client_hours&cols=row_id,employee,date,hours,work_country&values=row(23,$who,$day,6,'US')&returning=*&$who='Ana Ruiz'&$day=date'2025-10-01'":{"kind":"write","count":1,"columns":["row_id","employee","date","hours","work_country"],"rows":[[23,"Ana Ruiz","2025-10-01",6,"US"]]},"!tcxp:/school.demo/sql/select?cols=first_name,gpa&from=students":{"kind":"rows","columns":["first_name","gpa"],"rows":[["Maya",3.92],["Diego",3.78],["Priya",3.55],["Samuel",3.88],["Hannah",3.1],["Luca",3.67],["Amara",3.95],["Noah",2.95],["Sofia",3.4],["Ethan",3.2],["Leila",2.8],["Oliver",3.71]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[2,"Diego","Alvarez","diego.alvarez@school.demo","2026-fall",3.78,"2026-08-14"],[3,"Priya","Nair","priya.nair@school.demo","2026-spring",3.55,"2026-01-10"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[5,"Hannah","Weiss","hannah.weiss@school.demo","2025-fall",3.1,"2025-08-18"],[6,"Luca","Rossi","luca.rossi@school.demo","2026-fall",3.67,"2026-09-02"],[7,"Amara","Diallo","amara.diallo@school.demo","2026-spring",3.95,"2026-01-08"],[8,"Noah","Kim","noah.kim@school.demo","2026-fall",2.95,"2026-08-28"],[9,"Sofia","Petrov","sofia.petrov@school.demo","2025-fall",3.4,"2025-08-22"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"],[11,"Leila","Haddad","leila.haddad@school.demo","2026-spring",2.8,"2026-01-15"],[12,"Oliver","Grant","oliver.grant@school.demo","2026-fall",3.71,"2026-09-05"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=as(gpa,grade)&from=students":{"kind":"rows","columns":["grade"],"rows":[[3.92],[3.78],[3.55],[3.88],[3.1],[3.67],[3.95],[2.95],[3.4],[3.2],[2.8],[3.71]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=courses":{"kind":"rows","columns":["course_id","code","title","department","credits"],"rows":[[1,"CS101","Intro to Programming","CS",4],[2,"MATH140","Discrete Mathematics","MATH",3],[3,"DS210","Data Engineering Foundations","DS",4],[4,"STAT200","Applied Statistics","MATH",3],[5,"HCI150","Human-Computer Interaction","CS",3]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students&where=and(ge(gpa,3),ne(cohort,$c),lt(gpa,4))&$c='2025-fall'":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[2,"Diego","Alvarez","diego.alvarez@school.demo","2026-fall",3.78,"2026-08-14"],[3,"Priya","Nair","priya.nair@school.demo","2026-spring",3.55,"2026-01-10"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[6,"Luca","Rossi","luca.rossi@school.demo","2026-fall",3.67,"2026-09-02"],[7,"Amara","Diallo","amara.diallo@school.demo","2026-spring",3.95,"2026-01-08"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"],[12,"Oliver","Grant","oliver.grant@school.demo","2026-fall",3.71,"2026-09-05"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students&where=or(not(eq(cohort,'2026-fall')),gt(gpa,3.9))":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[3,"Priya","Nair","priya.nair@school.demo","2026-spring",3.55,"2026-01-10"],[5,"Hannah","Weiss","hannah.weiss@school.demo","2025-fall",3.1,"2025-08-18"],[7,"Amara","Diallo","amara.diallo@school.demo","2026-spring",3.95,"2026-01-08"],[9,"Sofia","Petrov","sofia.petrov@school.demo","2025-fall",3.4,"2025-08-22"],[11,"Leila","Haddad","leila.haddad@school.demo","2026-spring",2.8,"2026-01-15"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=courses&where=in(department,'CS','DS')":{"kind":"rows","columns":["course_id","code","title","department","credits"],"rows":[[1,"CS101","Intro to Programming","CS",4],[3,"DS210","Data Engineering Foundations","DS",4],[5,"HCI150","Human-Computer Interaction","CS",3]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students&where=between(gpa,3,3.5)":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[5,"Hannah","Weiss","hannah.weiss@school.demo","2025-fall",3.1,"2025-08-18"],[9,"Sofia","Petrov","sofia.petrov@school.demo","2025-fall",3.4,"2025-08-22"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students&where=ilike(email,$pat)&$pat='%25chen%25'":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=assignments&where=notnull(course_id)":{"kind":"rows","columns":["assignment_id","course_id","title","max_points","due_on"],"rows":[[1,1,"Variables and types",100,"2026-09-12"],[2,1,"Control flow",100,"2026-09-26"],[3,2,"Proof techniques",50,"2026-09-19"],[4,3,"Schema design",100,"2026-09-15"],[5,3,"SQL joins lab",100,"2026-09-29"],[6,4,"Sampling quiz",20,"2026-09-18"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=title,as(div(max_points,10),tenth)&from=assignments":{"kind":"rows","columns":["title","tenth"],"rows":[["Variables and types",10],["Control flow",10],["Proof techniques",5],["Schema design",10],["SQL joins lab",10],["Sampling quiz",2],["Ethics in data",5],["Capstone proposal template",10]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=upper(code),coalesce(due_on,date'2026-12-31')&from=courses&join=left(assignments,eq(assignments.course_id,courses.course_id))":{"kind":"rows","columns":["upper","coalesce"],"rows":[["CS101","2026-09-12"],["CS101","2026-09-26"],["MATH140","2026-09-19"],["DS210","2026-09-15"],["DS210","2026-09-29"],["STAT200","2026-09-18"],["HCI150","2026-12-31"]],"ordered":false},"!tcxp:/firm.demo/sql/select?cols=year(worked_on),count(*)&from=work_logs&group=year(worked_on)":{"kind":"rows","columns":["extract","count"],"rows":[[2025,10],[2024,12]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=count(*),avg(gpa),min(gpa),max(gpa),sum(gpa)&from=students":{"kind":"rows","columns":["count","avg","min","max","sum"],"rows":[[12,3.4925,2.8,3.95,41.91]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort":{"kind":"rows","columns":["cohort","count"],"rows":[["2026-spring",3],["2026-fall",7],["2025-fall",2]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort&having=gt(count(*),2)":{"kind":"rows","columns":["cohort","count"],"rows":[["2026-spring",3],["2026-fall",7]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=*&from=students&order=desc(gpa),asc(last_name)":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[7,"Amara","Diallo","amara.diallo@school.demo","2026-spring",3.95,"2026-01-08"],[1,"Maya","Chen","maya.chen@school.demo","2026-fall",3.92,"2026-08-12"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[2,"Diego","Alvarez","diego.alvarez@school.demo","2026-fall",3.78,"2026-08-14"],[12,"Oliver","Grant","oliver.grant@school.demo","2026-fall",3.71,"2026-09-05"],[6,"Luca","Rossi","luca.rossi@school.demo","2026-fall",3.67,"2026-09-02"],[3,"Priya","Nair","priya.nair@school.demo","2026-spring",3.55,"2026-01-10"],[9,"Sofia","Petrov","sofia.petrov@school.demo","2025-fall",3.4,"2025-08-22"],[10,"Ethan","Brooks","ethan.brooks@school.demo","2026-fall",3.2,"2026-08-05"],[5,"Hannah","Weiss","hannah.weiss@school.demo","2025-fall",3.1,"2025-08-18"],[8,"Noah","Kim","noah.kim@school.demo","2026-fall",2.95,"2026-08-28"],[11,"Leila","Haddad","leila.haddad@school.demo","2026-spring",2.8,"2026-01-15"]],"ordered":true},"!tcxp:/school.demo/sql/select?cols=*&from=students&order=asc(student_id)&limit=$n&offset=2&$n=3":{"kind":"rows","columns":["student_id","first_name","last_name","email","cohort","gpa","enrolled_on"],"rows":[[3,"Priya","Nair","priya.nair@school.demo","2026-spring",3.55,"2026-01-10"],[4,"Samuel","Okafor","samuel.okafor@school.demo","2026-fall",3.88,"2026-08-20"],[5,"Hannah","Weiss","hannah.weiss@school.demo","2025-fall",3.1,"2025-08-18"]],"ordered":true},"!tcxp:/school.demo/sql/select?cols=courses.code,enrollments.status&from=enrollments&join=right(courses,eq(courses.course_id,enrollments.course_id))":{"kind":"rows","columns":["code","status"],"rows":[["CS101","active"],["DS210","active"],["CS101","active"],["MATH140","dropped"],["DS210","completed"],["STAT200","active"],["CS101","active"],["DS210","active"],["MATH140","completed"],["CS101","active"],["HCI150","active"],["DS210","completed"],["STAT200","active"],["CS101","active"],["STAT200","completed"],["MATH140","active"],["DS210","active"],["HCI150","dropped"],["CS101","active"],["STAT200","active"]],"ordered":false},"!tcxp:/school.demo/sql/select?cols=courses.code,students.cohort&from=courses&join=cross(students)":{"kind":"rows","columns":["code","cohort"],"rows":[["CS101","2026-fall"],["CS101","2026-fall"],["CS101","2026-spring"],["CS101","2026-fall"],["CS101","2025-fall"],["CS101","2026-fall"],["CS101","2026-spring"],["CS101","2026-fall"],["CS101","2025-fall"],["CS101","2026-fall"],["CS101","2026-spring"],["CS101","2026-fall"],["MATH140","2026-fall"],["MATH140","2026-fall"],["MATH140","2026-spring"],["MATH140","2026-fall"],["MATH140","2025-fall"],["MATH140","2026-fall"],["MATH140","2026-spring"],["MATH140","2026-fall"],["MATH140","2025-fall"],["MATH140","2026-fall"],["MATH140","2026-spring"],["MATH140","2026-fall"],["DS210","2026-fall"],["DS210","2026-fall"],["DS210","2026-spring"],["DS210","2026-fall"],["DS210","2025-fall"],["DS210","2026-fall"],["DS210","2026-spring"],["DS210","2026-fall"],["DS210","2025-fall"],["DS210","2026-fall"],["DS210","2026-spring"],["DS210","2026-fall"],["STAT200","2026-fall"],["STAT200","2026-fall"],["STAT200","2026-spring"],["STAT200","2026-fall"],["STAT200","2025-fall"],["STAT200","2026-fall"],["STAT200","2026-spring"],["STAT200","2026-fall"],["STAT200","2025-fall"],["STAT200","2026-fall"],["STAT200","2026-spring"],["STAT200","2026-fall"],["HCI150","2026-fall"],["HCI150","2026-fall"],["HCI150","2026-spring"],["HCI150","2026-fall"],["HCI150","2025-fall"],["HCI150","2026-fall"],["HCI150","2026-spring"],["HCI150","2026-fall"],["HCI150","2025-fall"],["HCI150","2026-fall"],["HCI150","2026-spring"],["HCI150","2026-fall"]],"ordered":false}}};
 </script>
 <script>
 (function () {
@@ -2286,6 +2616,7 @@ function update(uri) {
   if (ser.uri !== state.uri) diags.push({level: 'info', msg: 'Canonical form differs from what was typed (spacing, key order or encoding). The colored line is the canonical form.'});
   $('#diags').innerHTML = diags.map(d => `<li class="diag ${d.level}">${esc(d.msg)}</li>`).join('');
   renderTree(tree);
+  renderFind();
   renderResult(tree);
   renderSpikes(tree);
   renderFibers(tree);
@@ -2379,6 +2710,17 @@ function renderTree(tree) {
     <span><i class="chip gap"></i>Gaps <b>${counts.gap}</b></span>
     <span><i class="chip annotation"></i>Annotations <b>${tree.spikes.length}</b></span>
     <span><i class="dash"></i>Binding</span>`;
+}
+// Find: query(uri, selector) lists pointers; hovering one highlights its node in the tree and the address.
+function renderFind() {
+  const out = $('#find-results'); const sel = $('#find-input').value.trim();
+  if (!sel || !state.tree) { out.innerHTML = ''; return; }
+  let hits;
+  try { hits = T.query(state.tree, sel); } catch (e) { out.innerHTML = `<li class="err">${esc(e.message)}</li>`; return; }
+  out.innerHTML = hits.length ? hits.map(h => {
+    const ids = T.resolvePointer(state.tree, h.pointer).map(n => n._id).filter(Boolean).join(' ');
+    return `<li data-spike-nodes="${esc(ids)}" title="${esc(h.kind)}"><b>${esc(h.label)}</b><code>${esc(h.pointer)}</code></li>`;
+  }).join('') : '<li class="none">No matches</li>';
 }
 function setHL(ids, on) { ids.forEach(id => document.querySelectorAll(`[data-node="${id}"]`).forEach(el => el.classList.toggle('hl', on))); }
 ['mouseover', 'mouseout'].forEach(type => document.addEventListener(type, e => {
@@ -2483,11 +2825,18 @@ function renderResult(tree) {
   card.querySelectorAll('form[data-gap]').forEach(f => f.addEventListener('submit', ev => {
     ev.preventDefault();
     const input = f.querySelector('input'); if (!input.value.trim()) { input.focus(); return; }
-    const key = (f.dataset.param === '1' ? '' : '$') + f.dataset.gap;
-    const val = f.dataset.param === '1' ? input.value.trim().replace(/%/g, '%25').replace(/&/g, '%26') : literalFor(input.value, f.dataset.type);
-    const base = state.uri.includes('?') ? state.uri + '&' : state.uri + '?';
-    let next = base + key + '=' + val;
-    try { next = T.serialize(T.parseURI(next)).uri; } catch (e) {}
+    let next;
+    if (f.dataset.param === '1') {
+      const base = state.uri.includes('?') ? state.uri + '&' : state.uri + '?';
+      next = base + f.dataset.gap + '=' + input.value.trim().replace(/%/g, '%25').replace(/&/g, '%26');
+      try { next = T.serialize(T.parseURI(next)).uri; } catch (e) {}
+    } else {
+      // The same edit API the engine exposes; the workbench stamps its own pulse when the state commits.
+      const raw = input.value.trim();
+      const value = raw.startsWith('@!tcxp:/') ? raw : literalFor(raw, f.dataset.type);
+      try { next = T.edit(state.uri, [{op: 'bind', var: f.dataset.gap, value}], {pulse: false}).uri; }
+      catch (e) { input.setCustomValidity(e.message); input.reportValidity(); input.addEventListener('input', () => input.setCustomValidity(''), {once: true}); return; }
+    }
     $('#uri-input').value = next; update(next);
   }));
 }
@@ -2820,6 +3169,8 @@ function init() {
   $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify(Object.assign({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent}, p.undo ? {undo: p.undo} : {}, {identity: p.identity, uri: p.uri}))).join('\n'), e.currentTarget));
   $('#fiber-tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (!b) return; state.fiber = b.dataset.f; $('#fiber-tabs').querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === b))); $('#fiber-body').innerHTML = state.fibers[state.fiber].html; });
   $('#pulses').addEventListener('click', e => { const li = e.target.closest('.pulse'); if (!li) return; const p = state.pulses.find(x => x.step === +li.dataset.step); if (p) loadURI(p.uri); });
+  $('#find-form').addEventListener('submit', e => e.preventDefault());
+  $('#find-input').addEventListener('input', renderFind);
   $('#fit-tree').addEventListener('click', e => { state.fit = !state.fit; e.currentTarget.setAttribute('aria-pressed', String(state.fit)); e.currentTarget.textContent = state.fit ? 'Actual size' : 'Fit to width'; $('#tree-scroll').classList.toggle('fit', state.fit); });
   $('#addr-toggle').addEventListener('change', e => {
     state.addressBar = e.target.checked;

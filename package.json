@@ -23,7 +23,8 @@
     "fuzz:writes": "node test/fuzz.mjs 1000 11 --writes",
     "compat": "node test/compat.mjs",
     "vectors": "node python/tools/export_vectors.mjs",
-    "gate": "npm run build && node test/verify.mjs && npm run build && node test/fuzz.mjs 2000 7 && node test/fuzz.mjs 1000 11 --writes && node test/compat.mjs && lean lean/Tcxp.lean"
+    "gate": "npm run build && node test/verify.mjs && npm run build && node test/fuzz.mjs 2000 7 && node test/fuzz.mjs 1000 11 --writes && node test/compat.mjs && node test/api.mjs && lean lean/Tcxp.lean",
+    "api": "node test/api.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8"

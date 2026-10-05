@@ -99,6 +99,7 @@ function update(uri) {
   if (ser.uri !== state.uri) diags.push({level: 'info', msg: 'Canonical form differs from what was typed (spacing, key order or encoding). The colored line is the canonical form.'});
   $('#diags').innerHTML = diags.map(d => `<li class="diag ${d.level}">${esc(d.msg)}</li>`).join('');
   renderTree(tree);
+  renderFind();
   renderResult(tree);
   renderSpikes(tree);
   renderFibers(tree);
@@ -192,6 +193,17 @@ function renderTree(tree) {
     <span><i class="chip gap"></i>Gaps <b>${counts.gap}</b></span>
     <span><i class="chip annotation"></i>Annotations <b>${tree.spikes.length}</b></span>
     <span><i class="dash"></i>Binding</span>`;
+}
+// Find: query(uri, selector) lists pointers; hovering one highlights its node in the tree and the address.
+function renderFind() {
+  const out = $('#find-results'); const sel = $('#find-input').value.trim();
+  if (!sel || !state.tree) { out.innerHTML = ''; return; }
+  let hits;
+  try { hits = T.query(state.tree, sel); } catch (e) { out.innerHTML = `<li class="err">${esc(e.message)}</li>`; return; }
+  out.innerHTML = hits.length ? hits.map(h => {
+    const ids = T.resolvePointer(state.tree, h.pointer).map(n => n._id).filter(Boolean).join(' ');
+    return `<li data-spike-nodes="${esc(ids)}" title="${esc(h.kind)}"><b>${esc(h.label)}</b><code>${esc(h.pointer)}</code></li>`;
+  }).join('') : '<li class="none">No matches</li>';
 }
 function setHL(ids, on) { ids.forEach(id => document.querySelectorAll(`[data-node="${id}"]`).forEach(el => el.classList.toggle('hl', on))); }
 ['mouseover', 'mouseout'].forEach(type => document.addEventListener(type, e => {
@@ -296,11 +308,18 @@ function renderResult(tree) {
   card.querySelectorAll('form[data-gap]').forEach(f => f.addEventListener('submit', ev => {
     ev.preventDefault();
     const input = f.querySelector('input'); if (!input.value.trim()) { input.focus(); return; }
-    const key = (f.dataset.param === '1' ? '' : '$') + f.dataset.gap;
-    const val = f.dataset.param === '1' ? input.value.trim().replace(/%/g, '%25').replace(/&/g, '%26') : literalFor(input.value, f.dataset.type);
-    const base = state.uri.includes('?') ? state.uri + '&' : state.uri + '?';
-    let next = base + key + '=' + val;
-    try { next = T.serialize(T.parseURI(next)).uri; } catch (e) {}
+    let next;
+    if (f.dataset.param === '1') {
+      const base = state.uri.includes('?') ? state.uri + '&' : state.uri + '?';
+      next = base + f.dataset.gap + '=' + input.value.trim().replace(/%/g, '%25').replace(/&/g, '%26');
+      try { next = T.serialize(T.parseURI(next)).uri; } catch (e) {}
+    } else {
+      // The same edit API the engine exposes; the workbench stamps its own pulse when the state commits.
+      const raw = input.value.trim();
+      const value = raw.startsWith('@!tcxp:/') ? raw : literalFor(raw, f.dataset.type);
+      try { next = T.edit(state.uri, [{op: 'bind', var: f.dataset.gap, value}], {pulse: false}).uri; }
+      catch (e) { input.setCustomValidity(e.message); input.reportValidity(); input.addEventListener('input', () => input.setCustomValidity(''), {once: true}); return; }
+    }
     $('#uri-input').value = next; update(next);
   }));
 }
@@ -633,6 +652,8 @@ function init() {
   $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify(Object.assign({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent}, p.undo ? {undo: p.undo} : {}, {identity: p.identity, uri: p.uri}))).join('\n'), e.currentTarget));
   $('#fiber-tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (!b) return; state.fiber = b.dataset.f; $('#fiber-tabs').querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === b))); $('#fiber-body').innerHTML = state.fibers[state.fiber].html; });
   $('#pulses').addEventListener('click', e => { const li = e.target.closest('.pulse'); if (!li) return; const p = state.pulses.find(x => x.step === +li.dataset.step); if (p) loadURI(p.uri); });
+  $('#find-form').addEventListener('submit', e => e.preventDefault());
+  $('#find-input').addEventListener('input', renderFind);
   $('#fit-tree').addEventListener('click', e => { state.fit = !state.fit; e.currentTarget.setAttribute('aria-pressed', String(state.fit)); e.currentTarget.textContent = state.fit ? 'Actual size' : 'Fit to width'; $('#tree-scroll').classList.toggle('fit', state.fit); });
   $('#addr-toggle').addEventListener('change', e => {
     state.addressBar = e.target.checked;

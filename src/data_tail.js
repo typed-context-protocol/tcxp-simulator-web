@@ -88,6 +88,7 @@ const S = '!tcxp:/school.demo/sql/select?';
 const F = '!tcxp:/firm.demo/sql/select?';
 const W = '!tcxp:/school.demo/sql/';
 const WF = '!tcxp:/firm.demo/sql/';
+const C = '!tcxp:/client.demo/sql/select?';
 const enc = s => s.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23');
 const spikes = rows => '~spikes=' + enc(JSON.stringify(rows));
 const intent = t => '~intent=' + enc(t);
@@ -184,9 +185,19 @@ const QUERIES = [
     W + 'delete?from=submissions'),
   Q('write-fk-violation','writes','Enroll a student who does not exist (foreign key error)','Enroll student 99 in CS101.',
     W + "insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')",
-    "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 99, 1, DATE '2026-10-04', 'active')")
+    "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 99, 1, DATE '2026-10-04', 'active')"),
+  // v0.2 CSV data source: client.demo/client_hours is loaded from a CSV with registerCSV (see data_csv.js).
+  Q('csv-us-hours-2024','csv','US hours in the client CSV, tax year 2024','What are the US hours worked in my client CSV in 2024?',
+    C + "cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024",
+    "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024"),
+  Q('csv-hours-by-employee','csv','Hours per person in the client CSV','How many hours did each person log, and where?',
+    C + 'cols=employee,work_country,as(sum(hours),total_hours),as(count(*),days)&from=client_hours&group=employee,work_country&order=asc(employee),asc(work_country)',
+    'SELECT employee, work_country, sum(hours) AS total_hours, count(*) AS days FROM client_hours GROUP BY employee, work_country ORDER BY employee ASC, work_country ASC'),
+  Q('csv-insert-row','csv','Add a day to the client CSV (write)','Add a 6-hour US day for Ana Ruiz on 2025-10-01.',
+    '!tcxp:/client.demo/sql/insert?into=client_hours&cols=row_id,employee,date,hours,work_country&values=row(23,$who,$day,6,\'US\')&returning=*&$who=\'Ana Ruiz\'&$day=date\'2025-10-01\'',
+    "INSERT INTO client_hours (row_id, employee, date, hours, work_country) VALUES (23, 'Ana Ruiz', DATE '2025-10-01', 6, 'US') RETURNING *")
 ];
 const GROUPS = [
   ['students','School · students table'],['submissions','School · submissions table'],['joins','School · joins'],
-  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes']
+  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes'],['csv','Client CSV']
 ];

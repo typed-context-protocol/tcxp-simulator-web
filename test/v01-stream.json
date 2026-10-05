@@ -1,0 +1,17 @@
+[
+ {
+  "seed": 7,
+  "n": 2000,
+  "sha256": "2c3444ed91d40cdf0dd7ea87caeee30ff8874de946b4897fe712f22e56102add"
+ },
+ {
+  "seed": 42,
+  "n": 500,
+  "sha256": "20d82cee010fc2b8283c4e13bd9be236ea9f49c748d04f655fce3b5683e5016b"
+ },
+ {
+  "seed": 23,
+  "n": 500,
+  "sha256": "e6d6534c1f21309b6fed00c69766ce3f67ca7c06a5bc3b89cb8786b9e7cbfeef"
+ }
+]
