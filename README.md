@@ -92,14 +92,26 @@ All results are reproducible with the commands below.
 
 ## Rebuild and re-verify
 
+The official gate is one command. Every change must pass it before it is committed:
+
 ```sh
 npm install                     # installs PGlite (PostgreSQL compiled to WebAssembly)
-npm run build                   # src/*.js -> tcxp.js -> tcxp-workbench.html
-node test/verify.mjs            # 49 cases against PostgreSQL, writes snapshot.json
-node test/fuzz.mjs 2000 7       # 2,000 random addresses, seed 7
-python3 src/build.py            # tcxp.js + app + snapshot -> tcxp-workbench.html
-lean lean/Tcxp.lean             # Lean 4.19+
+npm run gate
 ```
+
+`npm run gate` runs, in order, stopping at the first failure:
+
+```sh
+npm run build                   # src/*.js -> tcxp.js -> tcxp-workbench.html
+node test/verify.mjs            # every collection address and probe against PostgreSQL; writes snapshot.json
+npm run build                   # again, so the workbench embeds the snapshot verify just wrote
+node test/fuzz.mjs 2000 7       # 2,000 random read addresses, seed 7 (baseline: 1,541 PostgreSQL matches)
+node test/fuzz.mjs 1000 11 --writes   # 1,000 random writes and their inverses against PostgreSQL
+node test/compat.mjs            # every v0.1 address still identical (test/v01-baseline.json)
+lean lean/Tcxp.lean             # Lean 4.19+, no sorry
+```
+
+The build runs twice because the workbench embeds `snapshot.json`, which `verify.mjs` writes: a single build before verify would ship the previous snapshot.
 
 ## Hooks
 
