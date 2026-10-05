@@ -3,6 +3,8 @@
 #
 # Nothing is published unless every test passes. The npm and pypi environments require a reviewer,
 # so the real publishes wait for a person to press "Approve" in the run page.
+# tcxp 0.1.0 was published to npm by hand (npm trusted publishing needs the package to exist);
+# the npm job skips any version already on npm and otherwise publishes with OIDC, no token.
 name: release
 
 on:
@@ -167,11 +169,19 @@ jobs:
         with:
           node-version: '22'
           registry-url: https://registry.npmjs.org
+      - name: Skip if this version is already on npm
+        id: check
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if npm view "tcxp@$VERSION" version >/dev/null 2>&1; then
+            echo "tcxp@$VERSION is already on npm (published by hand); nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: npm 11.5.1+ (needed for trusted publishing)
+        if: steps.check.outputs.skip != 'true'
         run: npm install -g npm@^11.5.1
-      - name: npm publish (trusted publishing if configured, else the NPM_TOKEN secret)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: npm publish (trusted publishing, no token)
+        if: steps.check.outputs.skip != 'true'
         run: npm publish dist/npm/*.tgz --access public --provenance
 
   publish-pypi:
