@@ -3,7 +3,9 @@
 import { PGlite } from '@electric-sql/pglite';
 import { createRequire } from 'module';
 const T = createRequire(import.meta.url)('../tcxp.js');
-const N = Number(process.argv[2] || 500), SEED = Number(process.argv[3] || 42);
+const ARGS = process.argv.slice(2).filter(a => !a.startsWith('--'));
+const N = Number(ARGS[0] || 500), SEED = Number(ARGS[1] || 42);
+if (process.argv.includes('--writes')) { const { fuzzWrites } = await import('./fuzz-writes.mjs'); process.exit(await fuzzWrites(T, N, SEED)); }
 const dbs = {};
 for (const [name, reg] of Object.entries(T.REGISTRIES)) if (reg.db) { dbs[name] = new PGlite(); await dbs[name].exec(T.fullDDL(name)); }
 const scratch = new PGlite();

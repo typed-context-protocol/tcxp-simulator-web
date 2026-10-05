@@ -11,6 +11,8 @@ const state = { queryId: null, uri: '', tree: null, fit: false, addressBar: fals
 /* ---------------------------------------------------------------- explorer */
 const JOIN_TAG = {inner:'INNER', left:'LEFT', full:'FULL OUTER', right:'RIGHT', cross:'CROSS'};
 function queryTag(q) {
+  const w = q.uri.match(/\/sql\/(insert|update|delete)\?/);
+  if (w) return w[1].toUpperCase();
   if (q.uri.startsWith('@')) return '@ CALL';
   if (q.uri.includes('/math/eval')) return 'MATH';
   const m = q.uri.match(/join=(inner|left|full|right|cross)\(/);
@@ -22,7 +24,7 @@ function queryTag(q) {
 function hasGap(q) { try { return T.parseURI(q.uri).gaps.length > 0; } catch (e) { return false; } }
 function renderExplorer() {
   const regs = Object.entries(T.REGISTRIES).map(([name, r]) => {
-    const tables = r.db ? r.db.schema.tables.map(t => `<button class="ex-item" data-table="${name}|${t.name}"><span class="t"><code>${t.name}</code></span><span class="meta">${r.db.seed[t.name].length} rows</span></button>`).join('') : '';
+    const tables = r.db ? r.db.schema.tables.map(t => `<button class="ex-item" data-table="${name}|${t.name}"><span class="t"><code>${t.name}</code></span><span class="meta" data-count="${name}|${t.name}">${r.db.seed[t.name].length} rows</span></button>`).join('') : '';
     const fns = Object.keys(r.fns).map(f => `<button class="ex-item" data-uri="${esc('@!tcxp:/' + name + '/' + f)}"><span class="t"><code>${esc(f)}</code></span><span class="meta">function</span></button>`).join('');
     const notes = Object.keys(r.notes).map(n => `<button class="ex-item" data-uri="${esc('!tcxp:/' + name + '/' + n)}"><span class="t"><code>${esc(n)}</code></span><span class="meta">note</span></button>`).join('');
     const schema = r.db ? `<button class="ex-item" data-schema="${name}"><span class="t">Data dictionary and DDL</span><span class="meta">${r.db.schema.tables.length} tables</span></button>` : '';
@@ -45,6 +47,10 @@ function renderExplorer() {
     else if (b.dataset.schema) openSchema(b.dataset.schema, b);
     else if (b.dataset.uri) loadURI(b.dataset.uri);
   });
+}
+// Table row counts in the explorer follow this session's data, which writes change.
+function refreshCounts() {
+  document.querySelectorAll('[data-count]').forEach(el => { const [r, t] = el.dataset.count.split('|'); el.textContent = T.tableRows(r, t).length + ' rows'; });
 }
 function markCurrent() {
   document.querySelectorAll('.ex-item[data-query]').forEach(b => b.setAttribute('aria-current', String(b.dataset.query === state.queryId)));
@@ -203,9 +209,15 @@ const norm = v => {
   if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2} \d/.test(v)) return new Date(v.replace(' ', 'T').replace(/\+00$/, '+00:00')).toISOString();
   return v;
 };
+const unordered = rs => JSON.stringify(rs.map(r => JSON.stringify(r)).sort());
 function snapshotCheck(tree, res) {
   const s = SNAP.results[T.identity(tree)];
   if (!s) return null;
+  if (res.kind === 'preview' || res.kind === 'write') {
+    if (s.kind !== 'write') return false;
+    return res.count === s.count && JSON.stringify(res.returning.columns) === JSON.stringify(s.columns) && unordered(res.returning.rows.map(r => r.map(norm))) === unordered(s.rows);
+  }
+  if (res.kind === 'error') return s.kind === 'error' && s.code === res.code;
   if (s.kind !== res.kind) return false;
   if (s.kind === 'gap') return JSON.stringify(s.gaps) === JSON.stringify(res.gaps);
   if (s.kind === 'value') return norm(res.value) === s.value;
@@ -214,10 +226,13 @@ function snapshotCheck(tree, res) {
   const key = rs => s.ordered ? JSON.stringify(rs) : JSON.stringify(rs.map(r => JSON.stringify(r)).sort());
   return key(a) === key(s.rows) && JSON.stringify(res.columns) === JSON.stringify(s.columns);
 }
-function badge(tree, res) {
+function badge(tree, res, dataWasClean) {
+  if ((res.kind === 'rows' || res.kind === 'preview') && T.dataChanged()) return `<span class="pill warn">Session data changed by a write; the ${esc(ENGINE)} reference is for the shipped data</span>`;
+  if (dataWasClean === false) return `<span class="pill warn">Ran on changed session data; the ${esc(ENGINE)} reference is for the shipped data</span>`;
   const ok = snapshotCheck(tree, res);
   if (ok === null) return `<span class="pill mute">No ${esc(ENGINE)} reference for this address</span>`;
   if (res.kind === 'call') return ok ? `<span class="pill ok">✓ Matches verified result</span>` : `<span class="pill bad">✗ Differs from verified result</span>`;
+  if (res.kind === 'error') return ok ? `<span class="pill ok">✓ ${esc(ENGINE)} fails the same way (${esc(res.code)})</span>` : `<span class="pill bad">✗ ${esc(ENGINE)} does not fail this way</span>`;
   return ok ? `<span class="pill ok">✓ Matches ${esc(ENGINE)}</span>` : `<span class="pill bad">✗ Differs from ${esc(ENGINE)}</span>`;
 }
 function cell(v) {
@@ -250,7 +265,10 @@ function gapPanel(tree) {
 }
 function renderResult(tree) {
   const card = $('#result-card'); const title = $('#result-title');
-  if (tree.diagnostics.some(d => d.level === 'error')) { title.textContent = 'Result'; card.innerHTML = `<div class="err-box">Resolve the errors above to run this address.</div>`; return; }
+  const errDiag = tree.diagnostics.find(d => d.level === 'error' || d.level === 'refused');
+  if (errDiag && errDiag.level === 'refused') { title.textContent = 'Write refused'; card.innerHTML = `<div class="err-box">${esc(errDiag.msg)}</div><div class="status-line"><span>Nothing ran. The engine refuses this before any data is touched.</span></div>`; return; }
+  if (errDiag) { title.textContent = 'Result'; card.innerHTML = `<div class="err-box">Resolve the errors above to run this address.</div>`; return; }
+  if (tree.parsed.mode === 'write') { renderWrite(tree, card, title); return; }
   let res;
   try { res = T.execute(tree); } catch (e) { title.textContent = 'Result'; card.innerHTML = `<div class="err-box">${esc(e.message)}</div>`; return; }
   state.result = res;
@@ -286,6 +304,57 @@ function renderResult(tree) {
     $('#uri-input').value = next; update(next);
   }));
 }
+/* ------------------------------------------------------------------ writes */
+// A write address shows a preview. It runs only when "Run this write" arms it, exactly once; opening or
+// re-rendering an @ address never applies it by itself.
+const OPWORD = {insert: ['inserted', 'insert'], update: ['changed', 'change'], delete: ['removed', 'remove']};
+function changesTable(res) {
+  const cols = res.columns;
+  const body = res.changes.map(ch => {
+    if (res.op === 'insert') return `<tr class="ins">${ch.after.map(cell).join('')}</tr>`;
+    if (res.op === 'delete') return `<tr class="del">${ch.before.map(cell).join('')}</tr>`;
+    return `<tr>${ch.after.map((v, i) => ch.before[i] === v ? cell(v) : `<td class="chg"><s>${esc(fmtVal(ch.before[i]))}</s> → <b>${esc(fmtVal(v))}</b></td>`).join('')}</tr>`;
+  }).join('') || `<tr><td colspan="${cols.length}" class="null">No rows match</td></tr>`;
+  return `<div class="tbl-wrap" style="max-height:420px;overflow:auto"><table class="grid changes"><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+function plainOf(tree) { const u = T.serialize(tree).uri; return u.startsWith('@') ? u.slice(1) : u; }
+function renderWrite(tree, card, title) {
+  const id = T.identity(tree);
+  const done = state.lastWrite && state.lastWrite.identity === id ? state.lastWrite : null;
+  let res = null, err = null, clean = !T.dataChanged();
+  if (tree.parsed.call && state.armed === id && !done) {
+    state.armed = null;
+    try { res = T.execute(tree); state.lastWrite = {identity: id, res, clean}; refreshCounts(); } catch (e) { err = e; }
+  } else if (done) { res = done.res; clean = done.clean; }
+  else { try { res = T.execute(tree, {preview: true}); } catch (e) { err = e; } }
+  const resetBtn = T.dataChanged() ? `<button class="btn small" type="button" data-act="reset">Reset data</button>` : '';
+  if (err) {
+    title.textContent = 'Write would fail';
+    card.innerHTML = `<div class="err-box">${esc(err.message)}${err.code ? ` <code>${esc(err.code)}</code>` : ''}</div><div class="status-line"><span>Nothing was changed.</span>${badge(tree, {kind: 'error', code: err.code}, clean ? undefined : false)}${resetBtn}</div>`;
+  } else if (res.kind === 'gap') {
+    title.textContent = 'Write blocked';
+    card.innerHTML = gapPanel(tree) + `<div class="status-line"><span>Gaps block writes: no preview, and nothing runs, until every variable is bound.</span>${badge(tree, res)}</div>`;
+  } else {
+    const [done1, verb] = OPWORD[res.op];
+    const ret = res.returning.columns.length ? `<div class="sub-h">RETURNING</div>` + resultTable(res.returning.columns, res.returning.rows) : '';
+    if (res.kind === 'preview') {
+      title.textContent = 'Preview: nothing has changed yet';
+      card.innerHTML = `<div class="write-note">This write would ${verb} <b>${res.count}</b> row${res.count === 1 ? '' : 's'} in <code>${esc(res.table)}</code>.</div>` + changesTable(res) + ret +
+        `<div class="status-line"><button class="btn small primary" type="button" data-act="run">Run this write</button><span>Runs once, as <code>@</code>${esc(plainOf(tree).slice(0, 32))}…, on this session's copy of the data.</span>${badge(tree, res)}${resetBtn}</div>`;
+    } else {
+      title.textContent = 'Write applied';
+      card.innerHTML = `<div class="write-note ok">${res.count} row${res.count === 1 ? '' : 's'} ${done1} in <code>${esc(res.table)}</code> (this session's copy; the shipped data is untouched).</div>` + changesTable(res) + ret +
+        `<div class="sub-h">Inverse: ${res.inverse.length} address${res.inverse.length === 1 ? '' : 'es'} that undo this write exactly</div><ul class="inverse">${res.inverse.map(u => `<li><code>${esc(u)}</code></li>`).join('') || '<li class="null">Nothing to undo</li>'}</ul>` +
+        `<div class="status-line">${res.inverse.length ? '<button class="btn small" type="button" data-act="undo">Undo</button>' : ''}${resetBtn}${badge(tree, res, clean)}</div>`;
+    }
+  }
+  card.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
+    const act = b.dataset.act;
+    if (act === 'run') { const at = '@' + plainOf(tree); state.armed = T.identity(T.parseURI(at)); state.lastWrite = null; loadURI(at); }
+    else if (act === 'undo') { res.inverse.forEach(u => T.execute(T.parseURI(u))); state.lastWrite = null; refreshCounts(); loadURI(plainOf(tree)); }
+    else if (act === 'reset') { T.resetData(); state.lastWrite = null; refreshCounts(); update(state.uri); }
+  }));
+}
 function decidePanel(tree, decision) {
   const q = T.toMath(tree, true);
   const t = decision === true, f = decision === false, open = decision === null;
@@ -316,7 +385,7 @@ function renderSpikes(tree) {
 }
 
 /* ------------------------------------------------------------------ fibers */
-const KW = /\b(SELECT|FROM|WHERE|GROUP BY|HAVING|ORDER BY|LIMIT|OFFSET|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL OUTER JOIN|CROSS JOIN|ON|AND|OR|NOT|IN|BETWEEN|IS NOT NULL|IS NULL|LIKE|ILIKE|AS|ASC|DESC|DATE|extract|year from)\b/g;
+const KW = /\b(INSERT INTO|VALUES|RETURNING|UPDATE|SET|DELETE FROM|SELECT|FROM|WHERE|GROUP BY|HAVING|ORDER BY|LIMIT|OFFSET|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL OUTER JOIN|CROSS JOIN|ON|AND|OR|NOT|IN|BETWEEN|IS NOT NULL|IS NULL|LIKE|ILIKE|AS|ASC|DESC|DATE|extract|year from)\b/g;
 function hiSQL(sql) {
   return sql.split(/('(?:[^']|'')*')/).map((part, i) => i % 2 ? `<span class="lit">${esc(part)}</span>`
     : esc(part).replace(KW, '<span class="kw">$1</span>').replace(/\$(\d+)/g, '<span class="pm">$$$1</span>')).join('');
@@ -324,7 +393,7 @@ function hiSQL(sql) {
 function fmtVal(v) { return v === null || v === undefined ? 'null' : typeof v === 'string' ? `'${v}'` : String(v); }
 function renderFibers(tree) {
   const mode = tree.parsed.mode; const fib = {};
-  if (mode === 'sql' || mode === 'math') {
+  if (mode === 'sql' || mode === 'math' || mode === 'write') {
     const g = T.toSQL(tree);
     const rows = g.paramNames.map((name, i) => {
       const slot = T.findSlot(tree.root, name);
@@ -367,9 +436,10 @@ function commitPulse(tree) {
   state.step += 1;
   const at = new Date().toISOString();
   const parent = last ? last.identity : null;
-  const uri = T.withPulse(tree, state.step, at, T.DEBOUNCE_MS, parent);
   const id = T.identity(tree);
-  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: (metaOf(tree, 'intent') || tree.parsed.registry + '/' + tree.parsed.path)});
+  const wrote = state.lastWrite && state.lastWrite.identity === id ? {undo: state.lastWrite.res.inverse} : null;
+  const uri = T.withPulse(tree, state.step, at, T.DEBOUNCE_MS, parent, wrote);
+  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, undo: wrote ? wrote.undo : null, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: (metaOf(tree, 'intent') || tree.parsed.registry + '/' + tree.parsed.path)});
   renderPulses(); syncAddressBar();
 }
 function renderPulses() {
@@ -399,7 +469,7 @@ function columnsTable(t) {
 function openTable(reg, name, opener) {
   const db = T.REGISTRIES[reg].db; const t = db.schema.tables.find(x => x.name === name);
   openSheet(reg + ' · ' + name, t.description, [
-    ['Rows (' + db.seed[name].length + ')', () => `<div class="card">${resultTable(t.columns.map(c => c[0]), db.seed[name])}</div>`],
+    ['Rows (' + T.tableRows(reg, name).length + ')', () => `<div class="card">${resultTable(t.columns.map(c => c[0]), T.tableRows(reg, name))}</div>${T.dataChanged() ? '<div class="status-line">This session\'s data, after the writes run here. Reset data restores the shipped rows.</div>' : ''}`],
     ['Columns', () => columnsTable(t)],
     ['DDL', () => `<div class="card"><pre class="code">${hiSQL(T.tableDDL(t) + '\n' + T.tableInserts(t, db.seed))}</pre></div>`]
   ], opener);
@@ -425,7 +495,10 @@ function runTests() {
       rt = T.serialize(tree).uri === q.uri;
       strict = T.serialize(T.parseURI(T.strictForm(q.uri))).uri === q.uri;
       if (q.ref) ref = T.toSQL(tree, {inline: true}).sql.replace(/\s+/g, ' ') === q.ref;
-      const r = T.execute(tree); kind = r.kind;
+      let r;
+      try { r = T.execute(tree, {store: T.newStore()}); }
+      catch (e) { if (!e.code) throw e; r = {kind: 'error', code: e.code}; }
+      kind = r.kind === 'error' ? 'error ' + r.code : r.kind;
       res = snapshotCheck(tree, r) === true;
     } catch (e) { note = e.message; }
     const all = parse && rt && strict && ref !== false && res; if (all) qPass++;
@@ -452,8 +525,16 @@ function runTests() {
     inv.push(['Every parent is an earlier pulse', 'In a pulse chain, each parent equals the identity of an earlier pulse (the first has parent null)', pass, chain.length]); }
   check('Every pointer resolves', 'Each annotation pointer lands on at least one node', t => t.spikes.length ? t.spikes.every(sp => sp.data) : null);
   check('Every lit facet resolves', 'Facet addresses resolve to notes in a registry', t => t.spikes.length ? t.spikes.every(sp => !sp.problems.length) : null);
-  check('Gaps block execution', 'Any unbound variable makes execute() return a gap and run nothing', t => t.gaps.length ? T.execute(t).kind === 'gap' : null);
-  check('Bound trees have no gaps', 'With every variable bound, execution produces a result', t => t.gaps.length ? null : T.execute(t).kind !== 'gap');
+  check('Gaps block execution', 'Any unbound variable makes execute() return a gap and run nothing, writes included', t => { if (!t.gaps.length) return null; const st = T.newStore(); return T.execute(t, {store: st}).kind === 'gap' && !T.dataChanged(st); });
+  check('Bound trees have no gaps', 'With every variable bound, execution produces a result or a plain-language refusal, never a gap', t => { if (t.gaps.length) return null; try { return T.execute(t, {store: T.newStore()}).kind !== 'gap'; } catch (e) { return !!e.code; } });
+  check('A preview never writes', 'Running a write address without @ changes no data', t => { if (t.parsed.mode !== 'write' || t.gaps.length) return null; const st = T.newStore(); try { T.execute(t, {store: st, preview: true}); } catch (e) { if (!e.code) return false; } return !T.dataChanged(st); });
+  check('Inverse restores the data', 'Applying a write and then its inverse addresses leaves every table as it was', t => {
+    if (t.parsed.mode !== 'write' || t.gaps.length || t.diagnostics.some(d => d.level === 'error' || d.level === 'refused')) return null;
+    const st = T.newStore(); let w;
+    try { w = T.execute(T.parseURI('@' + T.serialize(t).uri.replace(/^@/, '')), {store: st}); } catch (e) { return e.code ? null : false; }
+    w.inverse.forEach(u => T.execute(T.parseURI(u), {store: st}));
+    return !T.dataChanged(st);
+  });
   $('#test-invariants').innerHTML = `<table class="grid"><thead><tr><th>Invariant</th><th>What it means</th><th>Result</th></tr></thead><tbody>${inv.map(([n, w, p, tot]) =>
     `<tr><td>${esc(n)}</td><td class="wrap">${esc(w)}</td><td>${p === tot ? `<span class="pill ok">✓ ${p} / ${tot}</span>` : `<span class="pill bad">✗ ${p} / ${tot}</span>`}</td></tr>`).join('')}</tbody></table>`;
 
@@ -462,7 +543,7 @@ function runTests() {
     let status;
     if (st === 'yes') {
       cYes++; let ok = false;
-      try { const t = T.parseURI(uri); ok = T.serialize(t).uri === uri && snapshotCheck(t, T.execute(t)) === true; } catch (e) {}
+      try { const t = T.parseURI(uri); ok = T.serialize(t).uri === uri && snapshotCheck(t, T.execute(t, {store: T.newStore()})) === true; } catch (e) {}
       if (ok) cVer++;
       status = ok ? '<span class="pill ok">✓ Represented, verified</span>' : '<span class="pill bad">✗ Represented, check failed</span>';
     } else { cNo++; status = '<span class="pill warn">Not representable yet</span>'; }
@@ -549,7 +630,7 @@ function init() {
   $('#reset-uri').addEventListener('click', () => selectQuery(state.queryId, {noScroll: true}));
   $('#copy-uri').addEventListener('click', e => copy(state.uri, e.currentTarget));
   $('#copy-fiber').addEventListener('click', e => { const f = state.fibers[state.fiber]; if (f) copy(f.text, e.currentTarget); });
-  $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent, identity: p.identity, uri: p.uri})).join('\n'), e.currentTarget));
+  $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify(Object.assign({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent}, p.undo ? {undo: p.undo} : {}, {identity: p.identity, uri: p.uri}))).join('\n'), e.currentTarget));
   $('#fiber-tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (!b) return; state.fiber = b.dataset.f; $('#fiber-tabs').querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === b))); $('#fiber-body').innerHTML = state.fibers[state.fiber].html; });
   $('#pulses').addEventListener('click', e => { const li = e.target.closest('.pulse'); if (!li) return; const p = state.pulses.find(x => x.step === +li.dataset.step); if (p) loadURI(p.uri); });
   $('#fit-tree').addEventListener('click', e => { state.fit = !state.fit; e.currentTarget.setAttribute('aria-pressed', String(state.fit)); e.currentTarget.textContent = state.fit ? 'Actual size' : 'Fit to width'; $('#tree-scroll').classList.toggle('fit', state.fit); });

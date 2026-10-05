@@ -1,5 +1,5 @@
 /-
-  Tcxp.lean — machine-checked core of the Typed Context Protocol (tcxp), v0.1.
+  Tcxp.lean — machine-checked core of the Typed Context Protocol (tcxp), v0.2.
 
   Checked with Lean 4.19.0, core library only (no Mathlib):
       lean Tcxp.lean
@@ -13,6 +13,9 @@
     2. gap_blocks      — any unbound variable (a gap) makes evaluation return nothing.
     3. identity_*      — the identity of an address ignores meta and pulses.
     4. bits_eq_iff     — a spike's 3-bit state equals another's exactly when the same facets are lit.
+    5. writes (v0.2)   — gap_blocks_write: a gap in a written value produces no table;
+                         delete_after_insert, update_after_update: the inverse restores the table exactly;
+                         insert_after_delete: the inverse restores the same rows (up to row order).
 
   Not yet proved here (see LEAN.md): the character-level layer (tokens <-> the address string with
   percent-encoding), and agreement between the tree evaluator and a formal SQL semantics.
@@ -258,5 +261,90 @@ def arith : String → List Int → Option Int
 example : eval (fun _ => none) arith eq2x3 = none :=
   gap_blocks _ _ "x" eq2x3 (by decide) rfl
 example : eval (fun v => if v = "x" then some 3 else none) arith eq2x3 = some 1 := by decide
+
+/-! ## 7. Writes: gaps block writes, and every write has an exact inverse
+
+  A table is a list of rows, each with a key (the primary key) and a value. A write appends,
+  removes or changes rows by key, as sql/insert, sql/delete and sql/update do in tcxp.js.
+  The engine's inverse of a write is another write; these theorems say applying it restores
+  the table: exactly for insert and update, and up to row order (a permutation) for delete,
+  since a table in SQL has no row order. -/
+
+structure Row where
+  key : Nat
+  val : Int
+  deriving Repr, DecidableEq
+
+abbrev Table := List Row
+
+def keys (t : Table) : List Nat := t.map Row.key
+
+/-- sql/insert appends the new row. -/
+def insertRow (r : Row) (t : Table) : Table := t ++ [r]
+
+/-- sql/delete where=eq(key, k). -/
+def deleteKey (k : Nat) (t : Table) : Table := t.filter (fun r => r.key != k)
+
+/-- sql/update set=assign(val, v) where=eq(key, k). -/
+def updateKey (k : Nat) (v : Int) (t : Table) : Table :=
+  t.map (fun r => if r.key = k then { r with val := v } else r)
+
+/-- Insert, then its inverse (delete by the new key), gives back the table exactly,
+    provided the key was not already taken (the primary key constraint). -/
+theorem delete_after_insert (r : Row) (t : Table) (h : r.key ∉ keys t) :
+    deleteKey r.key (insertRow r t) = t := by
+  unfold deleteKey insertRow
+  rw [List.filter_append]
+  have hs : t.filter (fun x => x.key != r.key) = t := by
+    apply List.filter_eq_self.mpr
+    intro x hx
+    have hne : x.key ≠ r.key := by
+      intro he; apply h; unfold keys; rw [← he]; exact List.mem_map_of_mem hx
+    simp [hne]
+  simp [hs]
+
+/-- Update, then its inverse (update back to the old value by key), gives back the table
+    exactly, provided every row with that key held the old value (true when the key is unique). -/
+theorem update_after_update (k : Nat) (old new : Int) (t : Table)
+    (h : ∀ r ∈ t, r.key = k → r.val = old) :
+    updateKey k old (updateKey k new t) = t := by
+  unfold updateKey
+  rw [List.map_map]
+  conv => rhs; rw [← List.map_id t]
+  apply List.map_congr_left
+  intro r hr
+  by_cases hk : r.key = k
+  · have hv := h r hr hk
+    cases r
+    simp_all
+  · simp [hk]
+
+/-- Delete, then its inverse (insert the removed row back), gives back the same rows,
+    possibly in a different order, provided exactly one row had that key. -/
+theorem insert_after_delete (k : Nat) (r : Row) (t : Table)
+    (h : t.filter (fun x => x.key == k) = [r]) :
+    (insertRow r (deleteKey k t)).Perm t := by
+  unfold insertRow deleteKey
+  have hp := List.filter_append_perm (fun x : Row => x.key != k) t
+  have hn : t.filter (fun x => !(x.key != k)) = [r] := by
+    rw [← h]; congr 1; funext x; simp only [bne, Bool.not_not]
+  rw [hn] at hp
+  exact hp
+
+/-- An insert whose value is an expression: it produces a new table only if the expression evaluates. -/
+def insertExpr (env : String → Option Int) (apply : String → List Int → Option Int)
+    (k : Nat) (e : Node) (t : Table) : Option Table :=
+  (eval env apply e).map (fun v => insertRow ⟨k, v⟩ t)
+
+/-- Gaps block writes: if the inserted value mentions a variable with no binding, the write
+    produces no table at all, for any interpretation of the operators. -/
+theorem gap_blocks_write (env : String → Option Int) (apply : String → List Int → Option Int)
+    (x : String) (k : Nat) (e : Node) (t : Table) (hx : x ∈ vars e) (hg : env x = none) :
+    insertExpr env apply k e t = none := by
+  unfold insertExpr
+  rw [gap_blocks env apply x e hx hg]
+  rfl
+
+example : deleteKey 3 (insertRow ⟨3, 7⟩ [⟨1, 5⟩, ⟨2, 6⟩]) = [⟨1, 5⟩, ⟨2, 6⟩] := by decide
 
 end Tcxp

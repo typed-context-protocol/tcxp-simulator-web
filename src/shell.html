@@ -133,7 +133,7 @@ a.btn { color: inherit; text-decoration: none; }
 .diags { list-style: none; margin: 0; padding: 0 14px 12px; display: flex; flex-direction: column; gap: 6px; }
 .diags:empty { display: none; }
 .diag { font-size: 13px; padding: 6px 10px; border-radius: 6px; }
-.diag.error { background: var(--bad-bg); color: var(--bad); }
+.diag.error, .diag.refused { background: var(--bad-bg); color: var(--bad); }
 .diag.warn { background: var(--warn-bg); color: var(--warn); }
 .diag.gap { background: var(--gap-fill); color: var(--gap-ink); }
 .diag.info { background: var(--sel); color: var(--ink-2); }
@@ -222,6 +222,15 @@ table.grid tr:last-child td { border-bottom: 0; }
 table.grid td.num { text-align: right; }
 table.grid td.null { color: var(--ink-3); font-style: italic; }
 table.grid td.wrap { white-space: normal; min-width: 240px; }
+table.grid.changes tr.ins td { background: var(--ok-bg); }
+table.grid.changes tr.del td { background: var(--bad-bg); text-decoration: line-through; text-decoration-color: var(--bad); }
+table.grid.changes td.chg { background: var(--warn-bg); }
+table.grid.changes td.chg s { color: var(--ink-3); }
+.write-note { padding: 12px 14px; font-size: 14px; border-bottom: 1px solid var(--line); }
+.write-note.ok { background: var(--ok-bg); color: var(--ok); }
+.sub-h { padding: 10px 14px 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); border-top: 1px solid var(--line); }
+ul.inverse { margin: 0; padding: 0 14px 10px 32px; font-size: 12px; }
+ul.inverse code { font-family: var(--font-code); word-break: break-all; }
 .status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
 .pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
 .pill.ok { background: var(--ok-bg); color: var(--ok); }

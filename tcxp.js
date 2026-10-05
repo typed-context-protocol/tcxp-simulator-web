@@ -1,4 +1,4 @@
-/* tcxp.js: Typed Context Protocol reference engine, v0.1.
+/* tcxp.js: Typed Context Protocol reference engine, v0.2.
    Plain script: defines globalThis.TCXP in browsers and module.exports in Node. */
 (function (root) {
 'use strict';
@@ -187,6 +187,8 @@ const REGISTRIES = {
 const Q = (id, group, title, intent, uri, ref) => ({id, group, title, intent, uri, ref: ref || null});
 const S = '!tcxp:/school.demo/sql/select?';
 const F = '!tcxp:/firm.demo/sql/select?';
+const W = '!tcxp:/school.demo/sql/';
+const WF = '!tcxp:/firm.demo/sql/';
 const enc = s => s.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23');
 const spikes = rows => '~spikes=' + enc(JSON.stringify(rows));
 const intent = t => '~intent=' + enc(t);
@@ -254,18 +256,47 @@ const QUERIES = [
     "SELECT sum(work_logs.hours) AS us_hours FROM work_logs WHERE work_logs.work_country = 'US' AND extract(year from work_logs.worked_on) = 2024"),
   Q('us-hours-fy-vs-tax','tax','US hours: calendar year vs fiscal year','How do US hours split between calendar years and project fiscal years?',
     F + "cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'",
-    "SELECT extract(year from work_logs.worked_on) AS calendar_year, projects.fiscal_year, sum(work_logs.hours) AS us_hours FROM work_logs INNER JOIN projects ON projects.project_id = work_logs.project_id WHERE work_logs.work_country = 'US' GROUP BY extract(year from work_logs.worked_on), projects.fiscal_year ORDER BY calendar_year ASC, projects.fiscal_year ASC")
+    "SELECT extract(year from work_logs.worked_on) AS calendar_year, projects.fiscal_year, sum(work_logs.hours) AS us_hours FROM work_logs INNER JOIN projects ON projects.project_id = work_logs.project_id WHERE work_logs.work_country = 'US' GROUP BY extract(year from work_logs.worked_on), projects.fiscal_year ORDER BY calendar_year ASC, projects.fiscal_year ASC"),
+  // v0.2 writes. Without @ each address is a proposed write (preview); with @ it runs.
+  Q('write-insert-one','writes','Add a course (insert one row)','Add the new Data Visualization course, DS310, worth 3 credits.',
+    W + "insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3",
+    "INSERT INTO courses (course_id, code, title, department, credits) VALUES (6, 'DS310', 'Data Visualization', 'DS', 3) RETURNING *"),
+  Q('write-insert-many','writes','Enroll a student in two courses (insert several rows)','Enroll Hannah Weiss in CS101 and DS210 today.',
+    W + "insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,$student,1,$today,'active'),row(22,$student,3,$today,'active')&returning=enrollment_id,course_id&$student=5&$today=date'2026-10-04'",
+    "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 5, 1, DATE '2026-10-04', 'active'), (22, 5, 3, DATE '2026-10-04', 'active') RETURNING enrollment_id, course_id"),
+  Q('write-update-bound','writes','Record a new GPA (update with bound variables)',"Record Noah Kim's new GPA of 3.15.",
+    W + 'update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8',
+    'UPDATE students SET gpa = 3.15 WHERE student_id = 8 RETURNING student_id, first_name, gpa'),
+  Q('write-update-call','writes','Move a student to the open cohort (update bound by a call)','Move Priya Nair into the cohort that is open for enrollment now.',
+    W + 'update?table=students&set=assign(cohort,$cohort)&where=eq(student_id,3)&returning=student_id,cohort&$cohort=@!tcxp:/school.demo/fn/current_cohort',
+    "UPDATE students SET cohort = '2026-fall' WHERE student_id = 3 RETURNING student_id, cohort"),
+  Q('write-delete-where','writes','Delete low late submissions (delete with where)','Delete the late submissions that scored under 60.',
+    W + "delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60",
+    "DELETE FROM submissions WHERE status = 'late' AND score < 60 RETURNING submission_id, score"),
+  Q('write-update-expr','writes','Add half an hour to a work log (update with an expression)',"Add half an hour to Ana Ruiz's work log for May 20, 2024.",
+    WF + 'update?table=work_logs&set=assign(hours,add(hours,$extra))&where=eq(log_id,2)&returning=log_id,hours&$extra=0.5',
+    'UPDATE work_logs SET hours = hours + 0.5 WHERE log_id = 2 RETURNING log_id, hours'),
+  Q('write-delete-all','writes','Clear every submission on purpose (where=true)','Clear every submission. Yes, all of them.',
+    W + 'delete?from=submissions&where=true&returning=submission_id',
+    'DELETE FROM submissions WHERE true RETURNING submission_id'),
+  Q('write-update-gap','writes','Set a GPA, value missing (gap blocks the write)',"Set Maya Chen's GPA.",
+    W + 'update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,1)'),
+  Q('write-delete-no-where','writes','Delete with no where (refused)','Delete every submission.',
+    W + 'delete?from=submissions'),
+  Q('write-fk-violation','writes','Enroll a student who does not exist (foreign key error)','Enroll student 99 in CS101.',
+    W + "insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')",
+    "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 99, 1, DATE '2026-10-04', 'active')")
 ];
 const GROUPS = [
   ['students','School · students table'],['submissions','School · submissions table'],['joins','School · joins'],
-  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours']
+  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes']
 ];
 /* ------------------------------------------------------------------ engine
-   tcxp v0.1 engine: parse an address into an expression tree, serialize it back,
+   tcxp engine: parse an address into an expression tree, serialize it back,
    resolve pointers, read annotations (spikes), interpret the tree as SQL, math,
-   a function call, or a JSON document. */
+   a function call, or a JSON document, and (v0.2) preview, perform and undo writes. */
 
-class TcxpError extends Error { constructor(msg, where) { super(msg); this.where = where; } }
+class TcxpError extends Error { constructor(msg, where, code) { super(msg); this.where = where; if (code) this.code = code; } }
 
 const SCHEME = '!tcxp:/';
 const CALL = '@';
@@ -317,8 +348,11 @@ const OPS = {
   asc:{sql:'ASC',kind:'postfix',arity:[1,1]}, desc:{sql:'DESC',kind:'postfix',arity:[1,1]},
   inner:{sql:'INNER JOIN',kind:'join',arity:[2,2]}, left:{sql:'LEFT JOIN',kind:'join',arity:[2,2]},
   right:{sql:'RIGHT JOIN',kind:'join',arity:[2,2]}, full:{sql:'FULL OUTER JOIN',kind:'join',arity:[2,2]},
-  cross:{sql:'CROSS JOIN',kind:'join',arity:[1,1]}
+  cross:{sql:'CROSS JOIN',kind:'join',arity:[1,1]},
+  row:{sql:'ROW',kind:'row',arity:[1,null],label:'ROW',write:true}, assign:{sql:'=',kind:'assign',arity:[2,2],label:':=',write:true}
 };
+// row() and assign() exist only in write addresses; select and math never see them.
+const SELECT_OPS = new Set(Object.keys(OPS).filter(k => !OPS[k].write));
 const MATH_OPS = new Set(['eq','ne','lt','le','gt','ge','add','sub','mul','div','pow','and','or','not']);
 const CLAUSES = {
   cols:{label:'COLUMNS',list:true}, from:{label:'FROM'}, join:{label:'JOIN',repeat:true}, where:{label:'WHERE'},
@@ -326,6 +360,13 @@ const CLAUSES = {
   limit:{label:'LIMIT'}, offset:{label:'OFFSET'}
 };
 const CLAUSE_ORDER = ['cols','from','join','where','group','having','order','limit','offset'];
+// Write profiles: sql/insert, sql/update, sql/delete. Keys appear in this canonical order.
+const WRITE_CLAUSES = {
+  insert: {into:{label:'INSERT INTO'}, cols:{label:'COLUMNS',list:true}, values:{label:'VALUES',list:true}, returning:{label:'RETURNING',list:true}},
+  update: {table:{label:'UPDATE'}, set:{label:'SET',list:true}, where:{label:'WHERE'}, returning:{label:'RETURNING',list:true}},
+  delete: {from:{label:'DELETE FROM'}, where:{label:'WHERE'}, returning:{label:'RETURNING',list:true}}
+};
+const WRITE_ORDER = {insert:['into','cols','values','returning'], update:['table','set','where','returning'], delete:['from','where','returning']};
 const labelFor = op => OPS[op].label || (OPS[op].kind === 'func' ? OPS[op].sql.toUpperCase() : OPS[op].sql);
 
 /* ------------------------------------------------------------ tokenizer */
@@ -456,10 +497,12 @@ function route(registry, path) {
   const reg = REGISTRIES[registry];
   if (!reg) throw new TcxpError('Unknown registry "' + registry + '". Known: ' + Object.keys(REGISTRIES).join(', '), 'registry');
   if (path === 'sql/select') { if (!reg.db) throw new TcxpError('Registry "' + registry + '" has no database for sql/select', 'path'); return {mode:'sql'}; }
+  const w = /^sql\/(insert|update|delete)$/.exec(path);
+  if (w) { if (!reg.db) throw new TcxpError('Registry "' + registry + '" has no database for ' + path, 'path'); return {mode:'write', op: w[1]}; }
   if (path === 'math/eval') return {mode:'math'};
   if (reg.fns[path]) return {mode:'fn', fn: reg.fns[path]};
   if (reg.notes[path] !== undefined) return {mode:'note', text: reg.notes[path]};
-  throw new TcxpError('Nothing at "' + registry + '/' + path + '". Try sql/select, math/eval, a function or a note.', 'path');
+  throw new TcxpError('Nothing at "' + registry + '/' + path + '". Try sql/select, sql/insert, sql/update, sql/delete, math/eval, a function or a note.', 'path');
 }
 
 function parseURI(input) {
@@ -476,7 +519,7 @@ function parseURI(input) {
   if (!segs.length) throw new TcxpError('Missing registry after !tcxp:/', 'registry');
   const registry = segs[0], path = segs.slice(1).join('/');
   const r = route(registry, path);
-  if (call && r.mode !== 'fn') throw new TcxpError('"@" calls a function, and ' + registry + '/' + path + ' is not one', 'call');
+  if (call && r.mode !== 'fn' && r.mode !== 'write') throw new TcxpError('"@" calls a function or performs a write, and ' + registry + '/' + path + ' is neither', 'call');
 
   const items = {}; const bindings = {}; const meta = []; const order = [];
   splitPairs(query).forEach(([k, v]) => {
@@ -493,6 +536,7 @@ function parseURI(input) {
       if (bindings[name]) throw new TcxpError('Variable ' + k + ' is bound twice', k);
       if (v.startsWith(CALL + SCHEME)) {
         const inner = parseURI(v);
+        if (inner.parsed.mode !== 'fn') throw new TcxpError('Variable ' + k + ' can only be bound by an @ call to a function, not by a write', k);
         bindings[name] = {kind:'call', tree: inner};
       } else {
         const vals = parseExprList(v, k);
@@ -504,10 +548,22 @@ function parseURI(input) {
     if (r.mode === 'sql') {
       if (!CLAUSES[k]) throw new TcxpError('Unknown key "' + k + '". Clause keys are ' + CLAUSE_ORDER.join(', ') + '; variables start with $, meta with ~.', k);
       if (items[k] && !CLAUSES[k].repeat) throw new TcxpError('Clause "' + k + '" appears twice', k);
-      const list = parseExprList(v, k);
+      const list = parseExprList(v, k, SELECT_OPS);
       if (!CLAUSES[k].list && !CLAUSES[k].repeat && list.length !== 1) throw new TcxpError('Clause "' + k + '" takes one expression', k);
       if (k === 'join') list.forEach(it => { if (it.kind !== 'operator' || OPS[it.op].kind !== 'join') throw new TcxpError('join= needs inner(), left(), right(), full() or cross()', k); });
       items[k] = (items[k] || []).concat(list);
+    } else if (r.mode === 'write') {
+      const W = WRITE_CLAUSES[r.op];
+      if (!W[k]) throw new TcxpError('Unknown key "' + k + '" for sql/' + r.op + '. Keys are ' + WRITE_ORDER[r.op].join(', ') + '; variables start with $, meta with ~.', k);
+      if (items[k]) throw new TcxpError('Key "' + k + '" appears twice', k);
+      const list = parseExprList(v, k);
+      if (!W[k].list && list.length !== 1) throw new TcxpError('Key "' + k + '" takes one expression', k);
+      if (k === 'values') list.forEach(it => { if (it.kind !== 'operator' || it.op !== 'row') throw new TcxpError('values= is a list of row(…), one per inserted row', k); });
+      if (k === 'set') list.forEach(it => { if (it.kind !== 'operator' || it.op !== 'assign' || it.children[0].kind !== 'reference') throw new TcxpError('set= is a list of assign(column, value)', k); });
+      if (k === 'cols') list.forEach(it => { if (it.kind !== 'reference' || it.name === '*') throw new TcxpError('cols= for an insert names the target columns', k); });
+      if (['into', 'table', 'from'].includes(k) && list[0].kind !== 'reference') throw new TcxpError(k + '= takes a table name', k);
+      if (k !== 'values' && k !== 'set') { const bad = []; (function find(n) { if (n.kind === 'operator' && OPS[n.op].write) bad.push(n.op); (n.children || []).forEach(find); })({children: list}); if (bad.length) throw new TcxpError(bad[0] + '() belongs in ' + (bad[0] === 'row' ? 'values=' : 'set='), k); }
+      items[k] = list;
     } else if (r.mode === 'math') {
       if (k !== 'expr') throw new TcxpError('math/eval takes one key, expr= (plus $variables and ~meta)', k);
       if (items.expr) throw new TcxpError('expr= appears twice', k);
@@ -532,7 +588,11 @@ function parseURI(input) {
     if (!items.cols) throw new TcxpError('A select needs cols=', 'cols');
   }
   if (r.mode === 'math' && !items.expr) throw new TcxpError('math/eval needs expr=', 'expr');
-  return buildTree({call, registry, path, mode: r.mode, fn: r.fn, note: r.text, items, bindings, meta});
+  if (r.mode === 'write') {
+    const need = {insert: ['into', 'cols', 'values'], update: ['table', 'set'], delete: ['from']}[r.op];
+    need.forEach(k => { if (!items[k]) throw new TcxpError('A' + (r.op === 'delete' ? ' ' : 'n ') + r.op + ' needs ' + k + '=', k); });
+  }
+  return buildTree({call, registry, path, mode: r.mode, op: r.op, fn: r.fn, note: r.text, items, bindings, meta});
 }
 
 /* ----------------------------------------------- tree + type inference */
@@ -584,6 +644,8 @@ function buildTree(parsed) {
       if (k === 'join') { items.join.forEach(j => root.children.push(j)); return; }
       root.children.push({kind:'operator', op:'clause:' + k, label:CLAUSES[k].label, children:items[k]});
     });
+  } else if (mode === 'write') {
+    root = buildWriteTree(parsed, diagnostics, slotsSeen);
   } else if (mode === 'math') {
     const walk = makeWalker(node => { diagnostics.push({level:'error', msg:'"' + node.name + '" is a reference, and math/eval has no data to point at. Write variables as $' + node.name + '.'}); }, {}, slotsSeen);
     walk(items.expr[0], 'expr');
@@ -617,7 +679,7 @@ function buildTree(parsed) {
     } else {
       s.children = [Object.assign({}, b, {bound:true})];
       if (s.type && b.type !== 'null' && family(s.type) !== family(b.type) && !(family(s.type) === 'time' && b.type === 'text'))
-        diagnostics.push({level:'warn', msg:'$' + s.name + ' expects ' + baseType(s.type) + ' but is bound to a ' + b.type + ' value'});
+        diagnostics.push({level: s.writeTarget ? 'error' : 'warn', code: s.writeTarget ? '42804' : undefined, msg:'$' + s.name + ' expects ' + baseType(s.type) + ' but is bound to a ' + b.type + ' value'});
     }
   });
   slotsSeen.forEach(name => { if (!bindings[name]) diagnostics.push({level:'gap', msg:'$' + name + ' is a gap: no value is bound, so this cannot run'}); });
@@ -746,7 +808,7 @@ function serialize(tree, opts) {
   }
   if (parsed.call) push('@', 'call', tree.root);
   push('!tcxp:/', 'scheme'); push(parsed.registry, 'registry');
-  push('/' + parsed.path, 'path', parsed.mode === 'fn' ? tree.root.children[0] : parsed.mode === 'note' ? tree.root : (parsed.mode === 'sql' ? tree.root : null));
+  push('/' + parsed.path, 'path', parsed.mode === 'fn' ? tree.root.children[0] : parsed.mode === 'note' ? tree.root : (parsed.mode === 'sql' || parsed.mode === 'write' ? tree.root : null));
   let first = true;
   const sep = () => { push(first ? '?' : '&', 'punct'); first = false; };
   if (parsed.mode === 'sql') {
@@ -755,6 +817,12 @@ function serialize(tree, opts) {
       const clauseNode = tree.root.children.find(c => c.op === 'clause:' + k);
       if (k === 'join') { list.forEach(j => { sep(); push('join', 'key'); push('=', 'punct'); ex(j); }); return; }
       sep(); push(k, 'key', clauseNode); push('=', 'punct');
+      list.forEach((it, i) => { if (i) push(',', 'punct'); ex(it); });
+    });
+  } else if (parsed.mode === 'write') {
+    WRITE_ORDER[parsed.op].forEach(k => {
+      const list = parsed.items[k]; if (!list) return;
+      sep(); push(k, 'key', tree.root.children.find(c => c.op === 'clause:' + k)); push('=', 'punct');
       list.forEach((it, i) => { if (i) push(',', 'punct'); ex(it); });
     });
   } else if (parsed.mode === 'math') {
@@ -812,7 +880,7 @@ function boundValues(tree) {
 function toSQL(tree, opts) {
   opts = opts || {};
   const p = tree.parsed;
-  if (p.mode !== 'sql' && p.mode !== 'math') return null;
+  if (p.mode !== 'sql' && p.mode !== 'math' && p.mode !== 'write') return null;
   const params = []; const order = [];
   const gapless = !tree.gaps.length;
   const bv = gapless ? boundValues(tree) : {vals:{}, via:{}};
@@ -859,6 +927,22 @@ function toSQL(tree, opts) {
     throw new TcxpError('Cannot render ' + n.op);
   }
   if (p.mode === 'math') return {sql: 'SELECT ' + e(p.items.expr[0]) + ' AS result', params, paramNames: order, via: bv.via};
+  if (p.mode === 'write') {
+    const it = p.items; const parts = []; const bare = n => n.name.split('.').pop();
+    if (p.op === 'insert') {
+      parts.push('INSERT INTO ' + it.into[0].name + ' (' + it.cols.map(bare).join(', ') + ')');
+      parts.push('VALUES ' + it.values.map(r => '(' + r.children.map(x => e(x)).join(', ') + ')').join(', '));
+    } else if (p.op === 'update') {
+      parts.push('UPDATE ' + it.table[0].name);
+      parts.push('SET ' + it.set.map(a => bare(a.children[0]) + ' = ' + e(a.children[1])).join(', '));
+      if (it.where) parts.push('WHERE ' + e(it.where[0]));
+    } else {
+      parts.push('DELETE FROM ' + it.from[0].name);
+      if (it.where) parts.push('WHERE ' + e(it.where[0]));
+    }
+    if (it.returning) parts.push('RETURNING ' + it.returning.map(x => e(x)).join(', '));
+    return {sql: parts.join('\n'), params, paramNames: order, via: bv.via};
+  }
   const it = p.items; const parts = [];
   parts.push('SELECT ' + it.cols.map(x => e(x)).join(', '));
   parts.push('FROM ' + it.from[0].name);
@@ -917,8 +1001,12 @@ function toJSON(tree) {
 
 /* ------------------------------------------------------ executor */
 // Gaps block execution: nothing runs while any variable is unbound.
-function execute(tree) {
-  if (tree.diagnostics.some(d => d.level === 'error')) throw new TcxpError(tree.diagnostics.find(d => d.level === 'error').msg);
+// opts.store: the data to read and write (default: this session's store). opts.preview: describe a write without applying it.
+function execute(tree, opts) {
+  opts = opts || {};
+  // An error means the address is malformed; "refused" means it is well formed but a safety rule forbids running it.
+  const err = tree.diagnostics.find(d => d.level === 'error') || tree.diagnostics.find(d => d.level === 'refused');
+  if (err) throw new TcxpError(err.msg, null, err.code);
   const p = tree.parsed;
   if (tree.gaps.length) return {kind:'gap', gaps: tree.gaps};
   if (p.mode === 'note') return {kind:'note', text: p.note};
@@ -928,7 +1016,9 @@ function execute(tree) {
     const v = evalExpr(p.items.expr[0], {}, {math:true}, vals, []);
     return {kind:'value', value: v, decision: typeof v === 'boolean' ? v : null};
   }
-  return Object.assign({kind:'rows'}, executeSQL(tree, vals));
+  const store = opts.store || STORE;
+  if (p.mode === 'write') return executeWrite(tree, vals, store, !p.call || !!opts.preview);
+  return Object.assign({kind:'rows'}, executeSQL(tree, vals, store));
 }
 
 const isDateish = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v);
@@ -1003,11 +1093,11 @@ function evalExpr(n, row, ctx, vals, scope) {
   throw new TcxpError('Cannot evaluate ' + n.op);
 }
 
-function executeSQL(tree, vals) {
+function executeSQL(tree, vals, store) {
   const it = tree.parsed.items;
   const db = REGISTRIES[tree.parsed.registry].db;
   const tdef = name => { const t = db.schema.tables.find(x => x.name === name); if (!t) throw new TcxpError('Unknown table "' + name + '"'); return t; };
-  const load = name => { const t = tdef(name); return db.seed[name].map(r => { const o = {}; t.columns.forEach((c, i) => { o[name + '.' + c[0]] = r[i]; }); return o; }); };
+  const load = name => { const t = tdef(name); return tableRows(tree.parsed.registry, name, store).map(r => { const o = {}; t.columns.forEach((c, i) => { o[name + '.' + c[0]] = r[i]; }); return o; }); };
   const nullRow = names => { const o = {}; names.forEach(nm => tdef(nm).columns.forEach(c => { o[nm + '.' + c[0]] = null; })); return o; };
   const scope = [it.from[0].name];
   const ev = (n, row, ctx) => evalExpr(n, row, ctx, vals, scope);
@@ -1078,13 +1168,244 @@ function executeSQL(tree, vals) {
   return {columns, rows: out.slice(off, off + lim)};
 }
 
+/* ------------------------------------------------------------ writes */
+// sql/insert, sql/update, sql/delete. Without @ an address describes a proposed write (result kind
+// "preview"); with @ it performs it (kind "write") on this session's copy of the registry data.
+// The shipped seed is never mutated. Constraint checks follow PostgreSQL's order: value coercion,
+// then NOT NULL, CHECK and UNIQUE row by row, then foreign keys at the end of the statement.
+// Error codes are PostgreSQL SQLSTATEs so tests can compare failures as well as successes.
+const writeTable = parsed => parsed.items[{insert: 'into', update: 'table', delete: 'from'}[parsed.op]][0].name;
+const colFlags = c => ({notNull: /NOT NULL|PRIMARY KEY/.test(c[2] || ''), unique: /UNIQUE|PRIMARY KEY/.test(c[2] || ''), pk: /PRIMARY KEY/.test(c[2] || ''),
+  fk: (/REFERENCES (\w+)\((\w+)\)/.exec(c[2] || '') || []).slice(1), check: (/CHECK \((.*)\)$/.exec(c[2] || '') || [])[1] || null});
+function buildWriteTree(parsed, diagnostics, slotsSeen) {
+  const {items, op} = parsed;
+  const db = REGISTRIES[parsed.registry].db;
+  const tname = writeTable(parsed);
+  const t = db.schema.tables.find(x => x.name === tname);
+  const COLS = {}; if (t) t.columns.forEach(c => { COLS[c[0]] = c[1]; });
+  const colOf = name => { const parts = name.split('.'); if (parts.length === 2 && parts[0] !== tname) return null; return COLS[parts[parts.length - 1]] ? parts[parts.length - 1] : null; };
+  const aliases = {};
+  const resolveRef = (node, ctx) => {
+    if (node.name === '*' || node.role === 'declares') return;
+    if (ctx === 'table') { if (!t) diagnostics.push({level:'error', msg:'Unknown table "' + node.name + '"'}); node.role = 'table'; return; }
+    if (ctx === 'value') { diagnostics.push({level:'error', msg:'"' + node.name + '" is a column; inserted values must be literals, variables or expressions on them'}); return; }
+    if (!t) return;
+    if (!node.name.includes('.') && aliases[node.name] !== undefined) { node.type = aliases[node.name]; node.role = 'alias'; return; }
+    const c = colOf(node.name);
+    if (!c) diagnostics.push({level:'error', msg:'Table ' + tname + ' has no column "' + node.name + '"'});
+    node.type = c ? COLS[c] : null; node.role = 'column';
+  };
+  const walk = makeWalker(resolveRef, aliases, slotsSeen);
+  // A variable or literal written straight into a column takes that column's type; a literal of another kind is an error.
+  const target = (n, col) => {
+    if (!col) return;
+    const type = COLS[col];
+    if (n.kind === 'slot') { n.type = type; n.typedBy = tname + '.' + col; n.writeTarget = true; }
+    if (n.kind === 'value' && n.type !== 'null' && family(type) !== family(n.type) && !(family(type) === 'time' && n.type === 'text'))
+      diagnostics.push({level:'error', code:'42804', msg:'Column ' + tname + '.' + col + ' is ' + baseType(type) + ', and ' + (n.type === 'text' ? "'" + n.value + "'" : String(n.value)) + ' is a ' + n.type + ' value'});
+  };
+  WRITE_ORDER[op].forEach(k => {
+    const list = items[k]; if (!list) return;
+    if (k === 'into' || k === 'table' || k === 'from') { walk(list[0], 'table'); return; }
+    if (k === 'cols') {
+      const seen = [];
+      list.forEach(r => { resolveRef(r, 'expr'); const c = colOf(r.name); if (c && seen.includes(c)) diagnostics.push({level:'error', msg:'Column "' + c + '" is listed twice in cols='}); seen.push(c); });
+      return;
+    }
+    if (k === 'values') {
+      list.forEach((row, i) => {
+        if (row.children.length !== items.cols.length) diagnostics.push({level:'error', msg:'Row ' + (i + 1) + ' has ' + row.children.length + ' value(s), but cols= names ' + items.cols.length + ' column(s)'});
+        row.children.forEach((v, j) => { walk(v, 'value'); if (items.cols[j]) target(v, colOf(items.cols[j].name)); });
+      });
+      return;
+    }
+    if (k === 'set') {
+      const seen = [];
+      list.forEach(a => {
+        resolveRef(a.children[0], 'expr'); walk(a.children[1], 'expr');
+        const c = colOf(a.children[0].name);
+        if (c && seen.includes(c)) diagnostics.push({level:'error', msg:'Column "' + c + '" is assigned twice in set='}); seen.push(c);
+        target(a.children[1], c);
+      });
+      return;
+    }
+    list.forEach(it => walk(it, 'expr'));
+  });
+  if (op !== 'insert' && !items.where)
+    diagnostics.push({level:'refused', code:'refused', msg:'Refused: a' + (op === 'update' ? 'n ' : ' ') + op + ' without where= would ' + (op === 'delete' ? 'remove' : 'change') + ' every row of ' + tname + '. Add a where= condition, or write where=true to mean every row on purpose.'});
+  const root = {kind:'operator', op, label: op.toUpperCase(), children:[]};
+  WRITE_ORDER[op].forEach(k => { if (items[k]) root.children.push({kind:'operator', op:'clause:' + k, label: WRITE_CLAUSES[op][k].label, children: items[k]}); });
+  return root;
+}
+
+// The session store: a lazily made copy of each table a write or read touches.
+function newStore() { return {tables: {}}; }
+const STORE = newStore();
+function tableRows(reg, name, store) {
+  store = store || STORE; const k = reg + '/' + name;
+  if (!store.tables[k]) { const seed = REGISTRIES[reg].db.seed[name]; if (!seed) throw new TcxpError('Unknown table "' + name + '"'); store.tables[k] = seed.map(r => r.slice()); }
+  return store.tables[k];
+}
+function resetData(store) { (store || STORE).tables = {}; }
+// True when the store holds different rows from the shipped seed (row order is ignored, as in SQL).
+const rowSet = rows => JSON.stringify(rows.map(r => JSON.stringify(r)).sort());
+function dataChanged(store) {
+  store = store || STORE;
+  return Object.entries(store.tables).some(([k, rows]) => { const [reg, name] = k.split('/'); return rowSet(rows) !== rowSet(REGISTRIES[reg].db.seed[name]); });
+}
+
+const isValidDate = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); if (!m) return false; const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3]; };
+// Coerce a value to a column type the way PostgreSQL stores it, or fail with a plain-language error.
+function coerce(v, col, tname) {
+  if (v === null || v === undefined) return null;
+  const type = col[1], b = baseType(type), where = tname + '.' + col[0];
+  const bad = (code, what) => { throw new TcxpError('Column ' + where + ' is ' + type + ', and ' + JSON.stringify(v) + ' ' + what, where, code); };
+  if (['integer', 'bigint', 'smallint'].includes(b)) {
+    if (typeof v !== 'number' || !Number.isInteger(v)) bad('22P02', 'is not a whole number');
+    const lim = {smallint: 32767, integer: 2147483647, bigint: Number.MAX_SAFE_INTEGER}[b];
+    if (v > lim || v < -lim - 1) bad('22003', 'is out of range');
+    return v;
+  }
+  if (b === 'numeric' || b === 'real' || b === 'double precision') {
+    if (typeof v !== 'number' || !Number.isFinite(v)) bad('22P02', 'is not a number');
+    const m = /numeric\((\d+),(\d+)\)/.exec(type);
+    if (!m) return v;
+    const sc = +m[2], f = Math.pow(10, sc);
+    const r = Math.sign(v) * Math.round(Math.abs(v) * f + 1e-9) / f;
+    if (Math.abs(r) >= Math.pow(10, +m[1] - sc)) bad('22003', 'does not fit (at most ' + (+m[1] - sc) + ' digit(s) before the decimal point)');
+    return r;
+  }
+  if (b === 'date') { if (typeof v !== 'string' || !isValidDate(v.slice(0, 10)) || (v.length > 10 && !/^\d{4}-\d{2}-\d{2}[ T]00:00(:00)?/.test(v))) bad('22007', 'is not a date (YYYY-MM-DD)'); return v.slice(0, 10); }
+  if (b === 'timestamptz' || b === 'timestamp') { if (typeof v !== 'string' || Number.isNaN(toCmp(v))) bad('22007', 'is not a timestamp'); return v; }
+  if (b === 'boolean') { if (typeof v !== 'boolean') bad('22P02', 'is not true or false'); return v; }
+  if (typeof v !== 'string') bad('42804', 'is not text');
+  return v;
+}
+// The CHECK forms used by the demo schemas: "c > n", "c BETWEEN a AND b", "c IN ('x','y')". Unknown forms are not enforced.
+function checkPasses(check, v) {
+  if (v === null) return true;
+  let m;
+  if ((m = /^\w+ > (-?[\d.]+)$/.exec(check))) return Number(v) > Number(m[1]);
+  if ((m = /^\w+ BETWEEN (-?[\d.]+) AND (-?[\d.]+)$/.exec(check))) return Number(v) >= Number(m[1]) && Number(v) <= Number(m[2]);
+  if ((m = /^\w+ IN \((.*)\)$/.exec(check))) return m[1].split(',').map(x => x.trim().replace(/^'|'$/g, '')).includes(String(v));
+  return true;
+}
+const showVal = v => v === null ? 'null' : typeof v === 'string' ? "'" + v + "'" : String(v);
+
+// Compute what a write would do, check every constraint, and return the plan without applying it.
+function planWrite(tree, vals, store) {
+  const p = tree.parsed, op = p.op, reg = p.registry, it = p.items;
+  const db = REGISTRIES[reg].db, tname = writeTable(p);
+  const t = db.schema.tables.find(x => x.name === tname);
+  const cols = t.columns, flags = cols.map(colFlags), names = cols.map(c => c[0]);
+  const idx = ref => names.indexOf(ref.name.split('.').pop());
+  const rows = tableRows(reg, tname, store);
+  const asObj = r => { const o = {}; names.forEach((n, i) => { o[tname + '.' + n] = r[i]; }); return o; };
+  const ev = (n, r) => evalExpr(n, r ? asObj(r) : {}, {}, vals, [tname]);
+  const working = rows.map(r => r.slice());
+  const fail = (code, msg) => { throw new TcxpError(msg, tname, code); };
+  const checkRow = (r, n, self) => {
+    flags.forEach((f, i) => { if (f.notNull && r[i] === null) fail('23502', 'Column ' + tname + '.' + names[i] + ' cannot be empty (NOT NULL), but ' + n + ' leaves it null.'); });
+    flags.forEach((f, i) => { if (f.check && !checkPasses(f.check, r[i])) fail('23514', 'Column ' + tname + '.' + names[i] + ' must satisfy CHECK (' + f.check + '), and ' + n + ' sets it to ' + showVal(r[i]) + '.'); });
+    flags.forEach((f, i) => {
+      if (!f.unique || r[i] === null) return;
+      if (working.some(o => o !== self && o[i] !== null && cmp(o[i], r[i]) === 0)) fail('23505', 'Column ' + tname + '.' + names[i] + ' must be unique (' + (f.pk ? 'PRIMARY KEY' : 'UNIQUE') + '), and ' + showVal(r[i]) + ' is already taken.');
+    });
+  };
+  let changes = [], affected = [];
+  if (op === 'insert') {
+    it.values.forEach((rowNode, ri) => {
+      const r = names.map(() => null);
+      it.cols.forEach((c, j) => { r[idx(c)] = ev(rowNode.children[j]); });
+      const cr = r.map((v, i) => coerce(v, cols[i], tname));
+      checkRow(cr, 'inserted row ' + (ri + 1)); working.push(cr); affected.push(cr); changes.push({before: null, after: cr});
+    });
+  } else {
+    const hits = [];
+    rows.forEach((r, i) => { if (ev(it.where[0], r) === true) hits.push(i); });
+    if (op === 'update') {
+      hits.forEach(i => {
+        const before = rows[i], after = before.slice();
+        it.set.forEach(a => { after[idx(a.children[0])] = ev(a.children[1], before); });
+        const cr = after.map((v, k) => coerce(v, cols[k], tname));
+        working[i] = cr; checkRow(cr, 'the update of row ' + showVal(before[0]), cr);
+        affected.push(cr); changes.push({index: i, before, after: cr});
+      });
+    } else {
+      hits.forEach(i => { affected.push(rows[i]); changes.push({index: i, before: rows[i], after: null}); });
+      const gone = new Set(hits); const kept = working.filter((_, i) => !gone.has(i)); working.length = 0; kept.forEach(r => working.push(r));
+    }
+  }
+  // Foreign keys, checked on the state the statement leaves behind (PostgreSQL's NO ACTION).
+  const state = name => name === tname ? working : tableRows(reg, name, store);
+  const exists = (name, col, v) => { const ti = db.schema.tables.find(x => x.name === name).columns.findIndex(c => c[0] === col); return state(name).some(r => r[ti] !== null && cmp(r[ti], v) === 0); };
+  if (op !== 'delete') flags.forEach((f, i) => {
+    if (!f.fk.length) return;
+    affected.forEach(r => { if (r[i] !== null && !exists(f.fk[0], f.fk[1], r[i])) fail('23503', tname + '.' + names[i] + ' = ' + showVal(r[i]) + ' does not match any ' + f.fk[0] + '.' + f.fk[1] + ' (FOREIGN KEY). Add that ' + f.fk[0] + ' row first, or use an existing ' + f.fk[1] + '.'); });
+  });
+  if (op !== 'insert') db.schema.tables.forEach(ct => ct.columns.forEach((c, ci) => {
+    const fk = colFlags(c).fk; if (fk[0] !== tname) return;
+    const pi = names.indexOf(fk[1]);
+    const removed = changes.map(ch => ch.before[pi]).filter(v => v !== null && !working.some(r => r[pi] !== null && cmp(r[pi], v) === 0));
+    removed.forEach(v => { if (state(ct.name).some(r => r[ci] !== null && cmp(r[ci], v) === 0)) fail('23503', (op === 'delete' ? 'Cannot delete ' : 'Cannot change ') + tname + ' row with ' + fk[1] + ' = ' + showVal(v) + ': ' + ct.name + '.' + c[0] + ' still refers to it (FOREIGN KEY). Remove or repoint those ' + ct.name + ' rows first.'); });
+  }));
+  // RETURNING
+  let retCols = [], retRows = [];
+  if (it.returning) {
+    const nameOf = n => n.kind === 'operator' && n.op === 'as' ? n.children[1].name : n.kind === 'reference' ? n.name.split('.').pop()
+      : n.kind === 'operator' && (OPS[n.op].kind === 'func' || OPS[n.op].kind === 'extract') ? OPS[n.op].sql : '?column?';
+    it.returning.forEach(x => { if (x.kind === 'reference' && x.name === '*') names.forEach(n => retCols.push(n)); else retCols.push(nameOf(x)); });
+    retRows = affected.map(r => { const out = []; it.returning.forEach(x => { if (x.kind === 'reference' && x.name === '*') r.forEach(v => out.push(v)); else out.push(ev(x, r)); }); return out; });
+  }
+  return {op, registry: reg, table: tname, columns: names, changes, count: changes.length, returning: {columns: retCols, rows: retRows}, working,
+    inverse: inverseOf(op, reg, t, changes, it)};
+}
+
+// Addresses that undo a write exactly: insert <-> delete by primary key, delete <-> insert of the removed
+// rows, update <-> update back to the old values by primary key. Tables without a primary key match on every column.
+function literalOf(v, type) {
+  if (v === null || v === undefined) return 'null';
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (baseType(type) === 'date') return "date'" + encLiteral(String(v)) + "'";
+  return "'" + encLiteral(String(v).replace(/'/g, "''")) + "'";
+}
+function inverseOf(op, reg, t, changes, it) {
+  if (!changes.length) return [];
+  const names = t.columns.map(c => c[0]);
+  const pk = t.columns.findIndex(c => /PRIMARY KEY/.test(c[2] || ''));
+  const base = '@!tcxp:/' + reg + '/sql/';
+  const match = r => pk >= 0 ? 'eq(' + names[pk] + ',' + literalOf(r[pk], t.columns[pk][1]) + ')'
+    : 'and(' + names.map((n, i) => r[i] === null ? 'isnull(' + n + ')' : 'eq(' + n + ',' + literalOf(r[i], t.columns[i][1]) + ')').join(',') + ')';
+  const canon = s => serialize(parseURI(s)).uri;
+  if (op === 'insert') {
+    const rows = changes.map(c => c.after);
+    const where = pk >= 0 && rows.length > 1 ? 'in(' + names[pk] + ',' + rows.map(r => literalOf(r[pk], t.columns[pk][1])).join(',') + ')'
+      : rows.length > 1 ? 'or(' + rows.map(match).join(',') + ')' : match(rows[0]);
+    return [canon(base + 'delete?from=' + t.name + '&where=' + where)];
+  }
+  if (op === 'delete') {
+    return [canon(base + 'insert?into=' + t.name + '&cols=' + names.join(',') + '&values=' + changes.map(c => 'row(' + c.before.map((v, i) => literalOf(v, t.columns[i][1])).join(',') + ')').join(','))];
+  }
+  const set = it.set.map(a => names.indexOf(a.children[0].name.split('.').pop()));
+  return changes.map(c => canon(base + 'update?table=' + t.name + '&set=' + set.map(i => 'assign(' + names[i] + ',' + literalOf(c.before[i], t.columns[i][1]) + ')').join(',') + '&where=' + match(c.after)));
+}
+
+function executeWrite(tree, vals, store, preview) {
+  const plan = planWrite(tree, vals, store);
+  const out = {kind: preview ? 'preview' : 'write', op: plan.op, table: plan.table, columns: plan.columns, changes: plan.changes,
+    count: plan.count, returning: plan.returning, inverse: plan.inverse};
+  if (!preview) store.tables[plan.registry + '/' + plan.table] = plan.working;
+  return out;
+}
+
 /* ------------------------------------------------------- pulse */
 // Each committed state gets one ~pulse row: {step, at, debounce_ms, parent}. Step counts commits, not keystrokes.
 // parent is the identity of the previous committed state (null for the first), so pulses form a chain.
 const DEBOUNCE_MS = 300;
-function withPulse(tree, step, at, debounce, parent) {
+// extra adds fields to the row, e.g. {undo: [inverse addresses]} for an executed write.
+function withPulse(tree, step, at, debounce, parent, extra) {
   const meta = tree.parsed.meta.filter(m => m[0] !== 'pulse');
-  meta.unshift(['pulse', [{step, at: at || new Date().toISOString(), debounce_ms: debounce || DEBOUNCE_MS, parent: parent || null}]]);
+  meta.unshift(['pulse', [Object.assign({step, at: at || new Date().toISOString(), debounce_ms: debounce || DEBOUNCE_MS, parent: parent || null}, extra || {})]]);
   const t = Object.assign({}, tree, {parsed: Object.assign({}, tree.parsed, {meta})});
   return serialize(t).uri;
 }
@@ -1095,7 +1416,7 @@ function withPulse(tree, step, at, debounce, parent) {
 const RULES = [
   ['scheme', 'Starts with !tcxp:/ (an address) or @!tcxp:/ (a call)'],
   ['meta-last', 'Every ~meta key comes after every other key'],
-  ['call-target', '@ is only used on a function address'],
+  ['call-target', '@ is only used on a function address or a write'],
   ['grammar', 'Parses under the profile grammar with no errors'],
   ['canonical', 'Re-serializes to exactly the same string']
 ];
@@ -1232,6 +1553,84 @@ class FilterGenerator {
     if (this.chance(0.3)) return '@!tcxp:/school.demo/fn/current_cohort';
     return '@!tcxp:/registry/hello?do=' + encLiteral(this.pick(WORDS));
   }
+  // Write mode (fuzz --writes): a random insert, update or delete as a plain (preview) address.
+  // Mostly valid; a few rows deliberately break a constraint so error codes get compared too.
+  // Separate from next(), so the read stream for a given seed never changes.
+  nextWrite() {
+    this.count++;
+    const regName = this.pick(['school.demo', 'firm.demo']);
+    const db = REGISTRIES[regName].db;
+    const t = this.pick(db.schema.tables), seed = db.seed[t.name], cols = t.columns, flags = cols.map(colFlags);
+    const valsOf = i => seed.map(r => r[i]).filter(v => v !== null);
+    const binds = {}; let vn = 0;
+    const operand = (v, type) => {
+      if (this.chance(0.35)) { const name = 'v' + (++vn); if (!this.chance(0.1)) binds[name] = literalOf(v, type); return '$' + name; }
+      return literalOf(v, type);
+    };
+    const pkMax = Math.max(...valsOf(0));
+    const parentVals = f => { const pt = db.schema.tables.find(x => x.name === f[0]); const i = pt.columns.findIndex(c => c[0] === f[1]); return db.seed[f[0]].map(r => r[i]); };
+    const freshNumber = (c, i) => {
+      const xs = valsOf(i), hi = Math.max(...xs.map(Number));
+      return baseType(c[1]) === 'numeric' ? Math.round((this.rand() * hi * 1.2 - 0.2) * 4) / 4 : Math.round(this.rand() * hi * 1.2);
+    };
+    const where = () => {
+      const r = this.rand();
+      if (r < 0.1) return 'true';
+      if (r < 0.65) return 'eq(' + cols[0][0] + ',' + operand(this.chance(0.85) ? this.pick(valsOf(0)) : pkMax + 7, cols[0][1]) + ')';
+      const i = this.int(cols.length), c = cols[i], xs = valsOf(i);
+      if (!xs.length) return 'isnull(' + c[0] + ')';
+      const fam = family(c[1]);
+      const op = fam === 'text' ? this.pick(['eq', 'ne']) : this.pick(['eq', 'ne', 'lt', 'le', 'gt', 'ge']);
+      return op + '(' + c[0] + ',' + operand(this.pick(xs), c[1]) + ')';
+    };
+    const returning = () => this.chance(0.5) ? '' : '&returning=' + (this.chance(0.4) ? '*' : (() => { const s = []; const n = 1 + this.int(3); for (let i = 0; i < n; i++) { const c = this.pick(cols)[0]; if (!s.includes(c)) s.push(c); } return s.join(','); })());
+    const kind = this.pick(['insert', 'insert', 'update', 'update', 'delete']);
+    let uri;
+    if (kind === 'insert') {
+      const use = cols.map((c, i) => i === 0 || flags[i].notNull || this.chance(0.7));
+      const names = cols.filter((_, i) => use[i]).map(c => c[0]);
+      const n = 1 + this.int(3), rows = [];
+      for (let k = 0; k < n; k++) {
+        const vals = [];
+        cols.forEach((c, i) => {
+          if (!use[i]) return;
+          const f = flags[i];
+          let v;
+          if (i === 0) v = this.chance(0.05) ? this.pick(valsOf(0)) : pkMax + 1 + k;
+          else if (f.unique) v = this.chance(0.05) ? this.pick(valsOf(i)) : 'gen-' + this.seed + '-' + this.count + '-' + k;
+          else if (f.fk.length) v = this.chance(0.07) ? 999 : this.pick(parentVals(f.fk).filter(x => x !== null));
+          else if (!f.notNull && this.chance(0.15)) v = null;
+          else if (f.notNull && this.chance(0.03)) v = null;
+          else if (family(c[1]) === 'number' && this.chance(0.3)) v = freshNumber(c, i);
+          else if (family(c[1]) === 'text' && this.chance(0.2)) v = this.pick(WORDS);
+          else v = this.pick(valsOf(i));
+          vals.push(operand(v, c[1]));
+        });
+        rows.push('row(' + vals.join(',') + ')');
+      }
+      uri = 'insert?into=' + t.name + '&cols=' + names.join(',') + '&values=' + rows.join(',') + returning();
+    } else if (kind === 'update') {
+      const choices = cols.map((c, i) => i).filter(i => i > 0 && !flags[i].unique);
+      const n = Math.min(choices.length, 1 + this.int(2)), set = [];
+      while (set.length < n) { const i = this.pick(choices); if (!set.includes(i)) set.push(i); }
+      const assigns = set.map(i => {
+        const c = cols[i], f = flags[i];
+        let e;
+        if (f.fk.length) e = operand(this.chance(0.1) ? 999 : this.pick(parentVals(f.fk).filter(x => x !== null)), c[1]);
+        else if (family(c[1]) === 'number' && this.chance(0.5)) e = this.pick(['add', 'sub']) + '(' + c[0] + ',' + operand(baseType(c[1]) === 'numeric' ? this.pick([0.25, 0.5, 1, 2.75, 7]) : this.pick([1, 2, 10]), c[1]) + ')';
+        else if (!f.notNull && this.chance(0.15)) e = 'null';
+        else e = operand(this.pick(valsOf(i)), c[1]);
+        return 'assign(' + c[0] + ',' + e + ')';
+      });
+      uri = 'update?table=' + t.name + '&set=' + assigns.join(',') + '&where=' + where() + returning();
+    } else {
+      uri = 'delete?from=' + t.name + '&where=' + where() + returning();
+    }
+    const base = '!tcxp:/' + regName + '/sql/' + uri;
+    const tree = parseURI(base);
+    const pairs = tree.slots.filter(s => binds[s] !== undefined).map(s => '$' + s + '=' + binds[s]);
+    return serialize(parseURI(pairs.length ? base + '&' + pairs.join('&') : base)).uri;
+  }
   randomPointer(tree) {
     if (tree.slots.length && this.chance(0.3)) return '/$' + this.pick(tree.slots);
     const keys = Object.keys(tree.parsed.items);
@@ -1269,7 +1668,7 @@ class FilterGenerator {
     const firstMeta = keys.findIndex(k => k[0] === '~');
     res['meta-last'] = firstMeta < 0 || keys.slice(firstMeta).every(k => k[0] === '~');
     try { tree = parseURI(uri); } catch (e) { err = e; }
-    res['call-target'] = !uri.startsWith('@') || !!(tree && tree.parsed.mode === 'fn');
+    res['call-target'] = !uri.startsWith('@') || !!(tree && (tree.parsed.mode === 'fn' || tree.parsed.mode === 'write'));
     res.grammar = !!tree && !tree.diagnostics.some(d => d.level === 'error');
     res.canonical = !!tree && serialize(tree).uri === uri;
     const rules = RULES.map(([id, name]) => ({id, name, pass: res[id], msg: !res[id] && err && ['grammar', 'call-target'].includes(id) ? err.message : null}));
@@ -1309,6 +1708,9 @@ const COVERAGE = [
   ['Math','Arithmetic and comparison in math/eval','yes',QUERIES[13].uri],
   ['Calls','@ call to a registry function','yes',QUERIES[10].uri],
   ['Annotations','~spikes pointing at nodes, facets lit or dark','yes',QUERIES[14].uri],
+  ['Writes','INSERT … VALUES … RETURNING','yes',QUERIES.find(q => q.id === 'write-insert-one').uri],
+  ['Writes','UPDATE … SET … WHERE … RETURNING','yes',QUERIES.find(q => q.id === 'write-update-bound').uri],
+  ['Writes','DELETE FROM … WHERE … RETURNING','yes',QUERIES.find(q => q.id === 'write-delete-where').uri],
   ['Joins','Table aliases (FROM students s)','no',null],
   ['Projection','SELECT DISTINCT','no',null],
   ['Aggregation','count(DISTINCT x)','no',null],
@@ -1318,7 +1720,6 @@ const COVERAGE = [
   ['Composition','Common table expressions (WITH)','no',null],
   ['Analytics','Window functions (OVER, PARTITION BY)','no',null],
   ['Expressions','Casts (::type)','no',null],
-  ['Writes','INSERT / UPDATE / DELETE','no',null],
   ['Schema','CREATE / ALTER / DROP','no',null],
   ['Variables','List-valued variables (IN $ids)','no',null],
   ['Calls','Calls with arguments nested inside expressions','no',null]
@@ -1326,6 +1727,7 @@ const COVERAGE = [
 
 const api = {REGISTRIES, QUERIES, GROUPS, OPS, CLAUSES, CLAUSE_ORDER, COVERAGE, FACETS, SCHEME, DEBOUNCE_MS,
   parseURI, serialize, identity, strictForm, resolvePointer, toSQL, toMath, toJSON, execute, withPulse,
+  newStore, resetData, dataChanged, tableRows, WRITE_CLAUSES, WRITE_ORDER,
   fullDDL, tableDDL, tableInserts, TcxpError, baseType, findSlot, FilterGenerator, RULES};
 root.TCXP = api;
 if (typeof module !== 'undefined') module.exports = api;

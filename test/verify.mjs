@@ -2,6 +2,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { createRequire } from 'module';
 import fs from 'fs';
+import { compareWrite } from './writes-lib.mjs';
 const T = createRequire(import.meta.url)('../tcxp.js');
 const dbs = {};
 for (const [name, reg] of Object.entries(T.REGISTRIES)) {
@@ -22,16 +23,33 @@ const nv = v => {
 const cases = [...T.QUERIES.map(q => ({id: q.id, uri: q.uri, ref: q.ref})),
   ...T.COVERAGE.filter(c => c[2] === 'yes').map(c => ({id: 'probe:' + c[1], uri: c[3]}))];
 const results = {}; let fail = 0;
+const V01 = new Set(JSON.parse(fs.readFileSync(new URL('./v01-baseline.json', import.meta.url), 'utf8')).map(b => b.id));
+let v01 = 0, v01fail = 0, writeCases = 0;
+// A write case runs in a fresh PostgreSQL database: preview (must not mutate), then the @ write in both
+// engines, then the inverse in both. Tables must match after the write and equal the seed after the inverse.
+async function checkWrite(c, tree) {
+  const plain = tree.parsed.call ? T.parseURI(c.uri.slice(1)) : tree;
+  const at = tree.parsed.call ? tree : T.parseURI('@' + c.uri);
+  const pg = new PGlite(); await pg.exec(T.fullDDL(tree.parsed.registry));
+  const w = await compareWrite(T, pg, plain, at);
+  await pg.close();
+  [T.identity(plain), T.identity(at)].forEach(k => { results[k] = w.result; });
+  return w;
+}
 for (const c of cases) {
   try {
     const tree = T.parseURI(c.uri);
     const id = T.identity(tree);
     const rt = T.serialize(tree).uri === c.uri;
     const strictRt = T.serialize(T.parseURI(T.strictForm(c.uri))).uri === c.uri;
-    const mem = T.execute(tree);
+    const mem = tree.parsed.mode === 'write' ? null : T.execute(tree);
     const mode = tree.parsed.mode;
     let ok = rt && strictRt, detail = '';
-    if (mem.kind === 'gap') {
+    if (mode === 'write') {
+      writeCases++;
+      const w = await checkWrite(c, tree); ok = ok && w.ok; detail = w.detail;
+      if (c.ref) { const inl = T.toSQL(tree, {inline: true}).sql.replace(/\s+/g, ' '); if (inl !== c.ref) { ok = false; console.log('  inline:', inl, '\n  ref:   ', c.ref); } }
+    } else if (mem.kind === 'gap') {
       results[id] = {kind: 'gap', gaps: mem.gaps};
       detail = 'gap ' + mem.gaps.join(',');
     } else if (mode === 'sql' || mode === 'math') {
@@ -59,9 +77,10 @@ for (const c of cases) {
     if (!rt) detail += ' ROUNDTRIP';
     if (!strictRt) detail += ' STRICT-ROUNDTRIP';
     if (!ok) fail++;
+    if (V01.has(c.id)) { v01++; if (!ok) v01fail++; }
     console.log(ok ? 'PASS' : 'FAIL', c.id.padEnd(48), detail);
-  } catch (e) { fail++; console.log('ERR ', c.id, e.message); }
+  } catch (e) { fail++; if (V01.has(c.id)) { v01++; v01fail++; } console.log('ERR ', c.id, e.message); }
 }
 fs.writeFileSync(new URL('../snapshot.json', import.meta.url), JSON.stringify({engine: ver, results}));
-console.log(ver.split(' on ')[0], '| cases', cases.length, '| failures', fail);
+console.log(ver.split(' on ')[0], '| cases', cases.length, '| failures', fail, '| v0.1 cases', v01, '| v0.1 failures', v01fail, '| write cases', writeCases);
 process.exit(fail ? 1 : 0);
