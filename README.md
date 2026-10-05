@@ -107,7 +107,9 @@ node test/verify.mjs            # every collection address and probe against Pos
 npm run build                   # again, so the workbench embeds the snapshot verify just wrote
 node test/fuzz.mjs 2000 7       # 2,000 random read addresses, seed 7 (baseline: 1,541 PostgreSQL matches)
 node test/fuzz.mjs 1000 11 --writes   # 1,000 random writes and their inverses against PostgreSQL
-node test/compat.mjs            # every v0.1 address still identical (test/v01-baseline.json)
+node test/compat.mjs            # every v0.1 address and seeded read stream still identical (test/v01-*.json)
+node test/api.mjs               # edit / query / fromJSON / registerCSV properties, JS-special names
+node test/intent.mjs            # ~intent rows: required variables, ask/block/default, identity unchanged
 lean lean/Tcxp.lean             # Lean 4.19+, no sorry
 ```
 

@@ -6,6 +6,12 @@
 class TcxpError extends Error { constructor(msg, where, code) { super(msg); this.where = where; if (code) this.code = code; } }
 
 const SCHEME = '!tcxp:/';
+// Names in an address are data, never JavaScript: "constructor" or "__proto__" must behave like any unknown name.
+// own() reads only an object's own properties; dict() is a map with no prototype; setOwn() defines a key even
+// when it is "__proto__".
+const own = (o, k) => o !== null && o !== undefined && Object.hasOwn(o, k) ? o[k] : undefined;
+const dict = () => Object.create(null);
+const setOwn = (o, k, v) => { Object.defineProperty(o, k, {value: v, writable: true, enumerable: true, configurable: true}); return v; };
 const CALL = '@';
 
 /* ----------------------------------------------------------- DDL helpers */
@@ -27,7 +33,8 @@ function tableInserts(t, seed) {
     seed[t.name].map(r => '  (' + r.map(sqlLit).join(', ') + ')').join(',\n') + ';\n';
 }
 function fullDDL(reg) {
-  const db = REGISTRIES[reg].db;
+  const r = own(REGISTRIES, reg); if (!r || !r.db) throw new TcxpError('Registry "' + reg + '" has no database');
+  const db = r.db;
   return '-- tcxp registry "' + reg + '" (PostgreSQL)\n-- ' + db.schema.description + '\n\n' +
     db.schema.tables.map(tableDDL).join('\n') + '\n' + db.schema.tables.map(t => tableInserts(t, db.seed)).join('\n');
 }
@@ -135,7 +142,7 @@ function parseExprList(src, where, allowed) {
     if (tk.t === 'id') {
       if (toks[p] && toks[p].t === '(') {
         p++;
-        const op = OPS[tk.v];
+        const op = own(OPS, tk.v);
         if (!op || (allowed && !allowed.has(tk.v))) throw new TcxpError('Operator "' + tk.v + '" is not in this profile', where);
         const args = [];
         if (!(toks[p] && toks[p].t === ')')) {
@@ -201,14 +208,14 @@ function splitPairs(query) {
   return out;
 }
 function route(registry, path) {
-  const reg = REGISTRIES[registry];
+  const reg = own(REGISTRIES, registry);
   if (!reg) throw new TcxpError('Unknown registry "' + registry + '". Known: ' + Object.keys(REGISTRIES).join(', '), 'registry');
   if (path === 'sql/select') { if (!reg.db) throw new TcxpError('Registry "' + registry + '" has no database for sql/select', 'path'); return {mode:'sql'}; }
   const w = /^sql\/(insert|update|delete)$/.exec(path);
   if (w) { if (!reg.db) throw new TcxpError('Registry "' + registry + '" has no database for ' + path, 'path'); return {mode:'write', op: w[1]}; }
   if (path === 'math/eval') return {mode:'math'};
-  if (reg.fns[path]) return {mode:'fn', fn: reg.fns[path]};
-  if (reg.notes[path] !== undefined) return {mode:'note', text: reg.notes[path]};
+  if (own(reg.fns, path)) return {mode:'fn', fn: own(reg.fns, path)};
+  if (own(reg.notes, path) !== undefined) return {mode:'note', text: own(reg.notes, path)};
   throw new TcxpError('Nothing at "' + registry + '/' + path + '". Try sql/select, sql/insert, sql/update, sql/delete, math/eval, a function or a note.', 'path');
 }
 
@@ -228,7 +235,7 @@ function parseURI(input) {
   const r = route(registry, path);
   if (call && r.mode !== 'fn' && r.mode !== 'write') throw new TcxpError('"@" calls a function or performs a write, and ' + registry + '/' + path + ' is neither', 'call');
 
-  const items = {}; const bindings = {}; const meta = []; const order = [];
+  const items = dict(); const bindings = dict(); const meta = []; const order = [];
   splitPairs(query).forEach(([k, v]) => {
     if (meta.length && k[0] !== '~') throw new TcxpError('Meta keys (~) must come last; "' + k + '" appears after ~' + meta[meta.length - 1][0], k);
     if (k[0] === '~') {
@@ -253,15 +260,16 @@ function parseURI(input) {
       return;
     }
     if (r.mode === 'sql') {
-      if (!CLAUSES[k]) throw new TcxpError('Unknown key "' + k + '". Clause keys are ' + CLAUSE_ORDER.join(', ') + '; variables start with $, meta with ~.', k);
-      if (items[k] && !CLAUSES[k].repeat) throw new TcxpError('Clause "' + k + '" appears twice', k);
+      const C = own(CLAUSES, k);
+      if (!C) throw new TcxpError('Unknown key "' + k + '". Clause keys are ' + CLAUSE_ORDER.join(', ') + '; variables start with $, meta with ~.', k);
+      if (items[k] && !C.repeat) throw new TcxpError('Clause "' + k + '" appears twice', k);
       const list = parseExprList(v, k, SELECT_OPS);
-      if (!CLAUSES[k].list && !CLAUSES[k].repeat && list.length !== 1) throw new TcxpError('Clause "' + k + '" takes one expression', k);
+      if (!C.list && !C.repeat && list.length !== 1) throw new TcxpError('Clause "' + k + '" takes one expression', k);
       if (k === 'join') list.forEach(it => { if (it.kind !== 'operator' || OPS[it.op].kind !== 'join') throw new TcxpError('join= needs inner(), left(), right(), full() or cross()', k); });
       items[k] = (items[k] || []).concat(list);
     } else if (r.mode === 'write') {
       const W = WRITE_CLAUSES[r.op];
-      if (!W[k]) throw new TcxpError('Unknown key "' + k + '" for sql/' + r.op + '. Keys are ' + WRITE_ORDER[r.op].join(', ') + '; variables start with $, meta with ~.', k);
+      if (!own(W, k)) throw new TcxpError('Unknown key "' + k + '" for sql/' + r.op + '. Keys are ' + WRITE_ORDER[r.op].join(', ') + '; variables start with $, meta with ~.', k);
       if (items[k]) throw new TcxpError('Key "' + k + '" appears twice', k);
       const list = parseExprList(v, k);
       if (!W[k].list && list.length !== 1) throw new TcxpError('Key "' + k + '" takes one expression', k);
@@ -318,11 +326,11 @@ function buildTree(parsed) {
   let root;
 
   if (mode === 'sql') {
-    const db = REGISTRIES[parsed.registry].db;
-    const COLS = {}; db.schema.tables.forEach(t => t.columns.forEach(c => { COLS[t.name + '.' + c[0]] = c[1]; }));
+    const db = own(REGISTRIES, parsed.registry).db;
+    const COLS = dict(); db.schema.tables.forEach(t => t.columns.forEach(c => { COLS[t.name + '.' + c[0]] = c[1]; }));
     const TABLES = new Set(db.schema.tables.map(t => t.name));
     const inScope = [items.from[0].name, ...(items.join || []).map(j => j.children[0].name)];
-    const aliases = {};
+    const aliases = dict();
     const resolveRef = (node, ctx) => {
       if (node.name === '*') return;
       if (node.role === 'declares') return;
@@ -371,11 +379,34 @@ function buildTree(parsed) {
     root = {kind:'reference', name: parsed.registry + '/' + parsed.path, role:'note', type:'text'};
   }
 
+  // ~intent rows (v0.2): a row's "require" names a variable that must be bound before anything runs, even
+  // one the query never uses. Such a variable gets its own slot beside the query tree (tree.intentSlots).
+  const intentMeta = parsed.meta.find(m => m[0] === 'intent');
+  const required = readIntent(intentMeta ? intentMeta[1] : undefined, diagnostics);
+  const modeOf = dict();
+  required.forEach(r => { if (!modeOf[r.name] || MODE_RANK[r.mode] > MODE_RANK[modeOf[r.name].mode]) modeOf[r.name] = r; });
+  const intentSlots = [];
+  Object.keys(modeOf).forEach(name => {
+    if (slotsSeen.includes(name)) return;
+    intentSlots.push({kind:'slot', name, children:[], requiredBy: required.filter(r => r.name === name).map(r => r.row)});
+    slotsSeen.push(name);
+  });
+
   // attach bound values (or nested calls) to variables; unbound variables are gaps
   const allSlots = [];
   (function collect(n) { if (n.kind === 'slot' && !n.param) allSlots.push(n); (n.children || []).forEach(collect); })(root);
+  intentSlots.forEach(s => allSlots.push(s));
+  const defaults = [], warnings = [];
   allSlots.forEach(s => {
     const b = bindings[s.name];
+    const rule = modeOf[s.name];
+    if (!b && rule && rule.mode === 'DEFAULT') {
+      // DEFAULT binds the row's default. It is never written into the address (identity is unchanged) and never silent.
+      s.children = [{kind:'value', value: rule.default, type: rule.defaultType, bound:true, defaulted:true}];
+      if (!defaults.some(d => d.var === s.name)) defaults.push({var: s.name, value: rule.default, row: rule.row, role: rule.role, text: rule.text});
+      return;
+    }
+    if (!b && rule && rule.mode === 'WARN' && intentSlots.includes(s)) { s.advisory = true; if (!warnings.some(w => w.var === s.name)) warnings.push({var: s.name, row: rule.row, role: rule.role, text: rule.text}); return; }
     if (!b) return;
     if (b.kind === 'call') {
       const inner = b.tree;
@@ -389,10 +420,16 @@ function buildTree(parsed) {
         diagnostics.push({level: s.writeTarget ? 'error' : 'warn', code: s.writeTarget ? '42804' : undefined, msg:'$' + s.name + ' expects ' + baseType(s.type) + ' but is bound to a ' + b.type + ' value'});
     }
   });
-  slotsSeen.forEach(name => { if (!bindings[name]) diagnostics.push({level:'gap', msg:'$' + name + ' is a gap: no value is bound, so this cannot run'}); });
+  slotsSeen.forEach(name => {
+    if (bindings[name]) return;
+    const rule = modeOf[name];
+    if (rule && rule.mode === 'DEFAULT') { diagnostics.push({level:'info', msg:'$' + name + ' is not bound, so intent row ' + (rule.row + 1) + ' defaults it to ' + JSON.stringify(rule.default)}); return; }
+    if (rule && rule.mode === 'WARN' && intentSlots.some(x => x.name === name)) { diagnostics.push({level:'warn', msg:'$' + name + ' is not bound. Intent row ' + (rule.row + 1) + ' only warns: ' + rule.text}); return; }
+    diagnostics.push({level:'gap', msg: rule ? '$' + name + ' is a gap: intent row ' + (rule.row + 1) + (rule.role ? ' (' + rule.role + ')' : '') + ' requires it (' + rule.mode + '). ' + rule.text : '$' + name + ' is a gap: no value is bound, so this cannot run'});
+  });
   Object.keys(bindings).forEach(k => { if (!slotsSeen.includes(k)) diagnostics.push({level:'warn', msg:'$' + k + ' is bound but never used'}); });
 
-  const tree = {root, parsed, slots: slotsSeen, diagnostics};
+  const tree = {root, parsed, slots: slotsSeen, diagnostics, intentSlots, required, defaults, warnings};
   tree.gaps = gapsOf(tree);
   tree.spikes = readSpikes(tree);
   tree.spikes.forEach(sp => sp.problems.forEach(msg => diagnostics.push({level:'warn', msg:'Annotation ' + sp.id + ': ' + msg})));
@@ -429,7 +466,35 @@ function makeWalker(resolveRef, aliases, slotsSeen) {
 
 function gapsOf(tree) {
   const out = [];
-  (function walk(n) { if (n.kind === 'slot' && !n.children.length && !out.includes(n.name)) out.push(n.name); (n.children || []).forEach(walk); })(tree.root);
+  const walk = n => { if (n.kind === 'slot' && !n.children.length && !n.advisory && !out.includes(n.name)) out.push(n.name); (n.children || []).forEach(walk); };
+  walk(tree.root); (tree.intentSlots || []).forEach(walk);
+  return out;
+}
+// ~intent: a string (legacy: one user row, no requirements) or an array of flat rows
+// {role, text, require: "$v" | ["$a","$b"], if_empty: "ASK" | "BLOCK" | "DEFAULT" | "WARN", default}.
+const MODE_RANK = {WARN: 0, DEFAULT: 1, ASK: 2, BLOCK: 3};
+function readIntent(v, diagnostics) {
+  if (v === undefined || typeof v === 'string' || typeof v === 'number') return [];
+  const rows = Array.isArray(v) ? v : [v];
+  const out = [];
+  rows.forEach((row, i) => {
+    const bad = msg => diagnostics.push({level:'error', msg:'~intent row ' + (i + 1) + ': ' + msg});
+    if (!row || typeof row !== 'object' || Array.isArray(row)) { bad('each row is a JSON object like {"role":"user","text":"…"}'); return; }
+    if (row.require === undefined || row.require === null) { if (row.if_empty !== undefined) bad('if_empty needs require'); return; }
+    const names = Array.isArray(row.require) ? row.require : [row.require];
+    const mode = row.if_empty === undefined ? 'BLOCK' : row.if_empty;
+    if (!Object.hasOwn(MODE_RANK, mode)) { bad('if_empty must be ASK, BLOCK, DEFAULT or WARN, not ' + JSON.stringify(mode)); return; }
+    let defaultType = null;
+    if (mode === 'DEFAULT') {
+      const d = row.default;
+      if (d === undefined || d === null || (typeof d !== 'number' && typeof d !== 'string' && typeof d !== 'boolean')) { bad('if_empty DEFAULT needs a default: a number, text or true/false'); return; }
+      defaultType = typeof d === 'number' ? (Number.isInteger(d) ? 'integer' : 'numeric') : typeof d === 'boolean' ? 'boolean' : 'text';
+    }
+    names.forEach(n => {
+      if (typeof n !== 'string' || !/^\$[A-Za-z_][A-Za-z0-9_]*$/.test(n)) { bad('require names variables like "$tax_year", not ' + JSON.stringify(n)); return; }
+      out.push({name: n.slice(1), row: i, mode, role: typeof row.role === 'string' ? row.role : null, text: typeof row.text === 'string' ? row.text : '', default: row.default, defaultType});
+    });
+  });
   return out;
 }
 
@@ -443,7 +508,8 @@ function resolvePointer(tree, ptr) {
   let starts;
   if (key && key[0] === '$') {
     starts = [];
-    (function walk(n) { if (n.kind === 'slot' && n.name === key.slice(1)) starts.push(n); (n.children || []).forEach(walk); })(tree.root);
+    const walk = n => { if (n.kind === 'slot' && n.name === key.slice(1)) starts.push(n); (n.children || []).forEach(walk); };
+    walk(tree.root); (tree.intentSlots || []).forEach(walk);
     return segs.length ? starts.map(s => descend(s.children, segs)).filter(Boolean) : starts;
   }
   const list = tree.parsed.items[key];
@@ -562,6 +628,10 @@ function findSlot(n, name) {
   return null;
 }
 const identity = tree => serialize(tree, {meta:false}).uri;
+// Intent rows never change identity, but they can decide whether a state runs (ask, gap, default). A stored
+// result is therefore keyed by the identity plus what the intent rows require; with no requirements it is the identity.
+const resultKey = tree => !tree.required || !tree.required.length ? identity(tree)
+  : identity(tree) + ' ~requires ' + JSON.stringify(tree.required.map(r => [r.name, r.mode, r.mode === 'DEFAULT' ? r.default : null]).sort());
 // Strict transport form: every character outside RFC 3986 unreserved/sub-delims is percent-encoded.
 function strictForm(uri) {
   return uri.replace(/[^A-Za-z0-9\-._~!$&'()*+,;=:@\/?%]/g, c => encodeURIComponent(c)).replace(/%(?![0-9A-Fa-f]{2})/g, '%25');
@@ -570,16 +640,17 @@ function strictForm(uri) {
 /* ------------------------------------------------------- bindings at runtime */
 function invoke(tree) {
   const p = tree.parsed;
-  const args = {};
+  const args = dict();
   p.fn.params.forEach(prm => { const s = p.items[prm.name][0]; args[prm.name] = s.children.length ? s.children[0].value : undefined; });
   return p.fn.fn(args);
 }
 function boundValues(tree) {
-  const vals = {}; const via = {};
+  const vals = dict(); const via = dict();
   Object.entries(tree.parsed.bindings).forEach(([k, b]) => {
     if (b.kind === 'call') { vals[k] = invoke(b.tree); via[k] = 'call'; }
     else { vals[k] = b.value; via[k] = 'literal'; }
   });
+  (tree.defaults || []).forEach(d => { vals[d.var] = d.value; via[d.var] = 'default'; });
   return {vals, via};
 }
 
@@ -612,7 +683,7 @@ function toSQL(tree, opts) {
     if (n.kind === 'reference') return n.name;
     if (n.kind === 'value') return value(n);
     if (n.kind === 'slot') {
-      if (opts.inline && n.name in bv.vals) { const b = p.bindings[n.name]; return b.kind === 'call' ? sqlLit(bv.vals[n.name]) : value(b); }
+      if (opts.inline && n.name in bv.vals) { const b = p.bindings[n.name]; return !b || b.kind === 'call' ? sqlLit(bv.vals[n.name]) : value(b); }
       return slotRef(n.name);
     }
     const o = OPS[n.op]; const c = n.children;
@@ -693,7 +764,7 @@ function toJSON(tree) {
     if (n.kind === 'operator') { o.op = n.op; }
     if (n.kind === 'reference') { o.name = n.name; if (n.role) o.role = n.role; }
     if (n.kind === 'slot') { o.name = n.name; if (!n.children.length) o.gap = true; }
-    if (n.kind === 'value') { o.value = n.value; }
+    if (n.kind === 'value') { o.value = n.value; if (n.defaulted) o.default = true; }
     if (n.type) o.type = baseType(n.type);
     if (n.children && n.children.length) o.children = n.children.map(clean);
     return o;
@@ -702,7 +773,11 @@ function toJSON(tree) {
   return {
     address: identity(tree), call: p.call, registry: p.registry, path: p.path, profile: p.mode,
     tree: clean(tree.root), gaps: tree.gaps,
-    meta: Object.fromEntries(p.meta)
+    meta: Object.fromEntries(p.meta),
+    ...(tree.intentSlots && tree.intentSlots.length ? {requires: tree.intentSlots.map(clean)} : {}),
+    // bindings for variables nothing uses (kept so fromJSON loses nothing)
+    ...(() => { const extra = Object.keys(p.bindings).filter(k => !tree.slots.includes(k)).map(k => { const b = p.bindings[k];
+      return clean({kind:'slot', name:k, children:[b.kind === 'call' ? b.tree.root : b]}); }); return extra.length ? {extra_bindings: extra} : {}; })()
   };
 }
 
@@ -715,7 +790,25 @@ function execute(tree, opts) {
   const err = tree.diagnostics.find(d => d.level === 'error') || tree.diagnostics.find(d => d.level === 'refused');
   if (err) throw new TcxpError(err.msg, null, err.code);
   const p = tree.parsed;
-  if (tree.gaps.length) return {kind:'gap', gaps: tree.gaps};
+  if (tree.gaps.length) {
+    // An intent row decides how a missing variable halts: ASK asks its question, BLOCK (or no row) is a gap.
+    const rule = name => (tree.required || []).filter(r => r.name === name).sort((a, b) => MODE_RANK[b.mode] - MODE_RANK[a.mode])[0];
+    const modes = tree.gaps.map(rule);
+    const asks = modes.filter(r => r && r.mode === 'ASK');
+    if (asks.length && !modes.some(r => r && r.mode === 'BLOCK'))
+      return {kind:'ask', question: asks[0].text, questions: asks.map(r => ({var: r.name, text: r.text, role: r.role, row: r.row})), gaps: tree.gaps};
+    return {kind:'gap', gaps: tree.gaps};
+  }
+  return withIntentNotes(tree, executeReady(tree, opts));
+}
+// Defaults and warnings travel with the result: a default is never applied silently.
+function withIntentNotes(tree, res) {
+  if (tree.defaults && tree.defaults.length) res.defaults = tree.defaults.map(d => ({var: d.var, value: d.value, row: d.row}));
+  if (tree.warnings && tree.warnings.length) res.warnings = tree.warnings.map(w => ({var: w.var, text: w.text, row: w.row}));
+  return res;
+}
+function executeReady(tree, opts) {
+  const p = tree.parsed;
   if (p.mode === 'note') return {kind:'note', text: p.note};
   if (p.mode === 'fn') return p.call ? {kind:'call', value: invoke(tree), returns: p.fn.returns} : {kind:'address'};
   const {vals} = boundValues(tree);
@@ -802,10 +895,10 @@ function evalExpr(n, row, ctx, vals, scope) {
 
 function executeSQL(tree, vals, store) {
   const it = tree.parsed.items;
-  const db = REGISTRIES[tree.parsed.registry].db;
+  const db = own(REGISTRIES, tree.parsed.registry).db;
   const tdef = name => { const t = db.schema.tables.find(x => x.name === name); if (!t) throw new TcxpError('Unknown table "' + name + '"'); return t; };
-  const load = name => { const t = tdef(name); return tableRows(tree.parsed.registry, name, store).map(r => { const o = {}; t.columns.forEach((c, i) => { o[name + '.' + c[0]] = r[i]; }); return o; }); };
-  const nullRow = names => { const o = {}; names.forEach(nm => tdef(nm).columns.forEach(c => { o[nm + '.' + c[0]] = null; })); return o; };
+  const load = name => { const t = tdef(name); return tableRows(tree.parsed.registry, name, store).map(r => { const o = dict(); t.columns.forEach((c, i) => { o[name + '.' + c[0]] = r[i]; }); return o; }); };
+  const nullRow = names => { const o = dict(); names.forEach(nm => tdef(nm).columns.forEach(c => { o[nm + '.' + c[0]] = null; })); return o; };
   const scope = [it.from[0].name];
   const ev = (n, row, ctx) => evalExpr(n, row, ctx, vals, scope);
   const truthy = x => x === true;
@@ -841,7 +934,7 @@ function executeSQL(tree, vals, store) {
     : n.kind === 'reference' ? n.name.split('.').pop()
     : n.kind === 'operator' && (OPS[n.op].kind === 'func' || OPS[n.op].kind === 'extract') ? OPS[n.op].sql : '?column?';
   units.forEach(u => {
-    const out = []; u.ctx.aliasVals = {};
+    const out = []; u.ctx.aliasVals = dict();
     it.cols.forEach(item => {
       if (item.kind === 'reference' && item.name === '*') {
         scope.forEach(t => tdef(t).columns.forEach(c => { out.push(u.row[t + '.' + c[0]]); if (!colsDone) columns.push(c[0]); }));
@@ -886,12 +979,12 @@ const colFlags = c => ({notNull: /NOT NULL|PRIMARY KEY/.test(c[2] || ''), unique
   fk: (/REFERENCES (\w+)\((\w+)\)/.exec(c[2] || '') || []).slice(1), check: (/CHECK \((.*)\)$/.exec(c[2] || '') || [])[1] || null});
 function buildWriteTree(parsed, diagnostics, slotsSeen) {
   const {items, op} = parsed;
-  const db = REGISTRIES[parsed.registry].db;
+  const db = own(REGISTRIES, parsed.registry).db;
   const tname = writeTable(parsed);
   const t = db.schema.tables.find(x => x.name === tname);
-  const COLS = {}; if (t) t.columns.forEach(c => { COLS[c[0]] = c[1]; });
+  const COLS = dict(); if (t) t.columns.forEach(c => { COLS[c[0]] = c[1]; });
   const colOf = name => { const parts = name.split('.'); if (parts.length === 2 && parts[0] !== tname) return null; return COLS[parts[parts.length - 1]] ? parts[parts.length - 1] : null; };
-  const aliases = {};
+  const aliases = dict();
   const resolveRef = (node, ctx) => {
     if (node.name === '*' || node.role === 'declares') return;
     if (ctx === 'table') { if (!t) diagnostics.push({level:'error', msg:'Unknown table "' + node.name + '"'}); node.role = 'table'; return; }
@@ -950,7 +1043,7 @@ function newStore() { return {tables: {}}; }
 const STORE = newStore();
 function tableRows(reg, name, store) {
   store = store || STORE; const k = reg + '/' + name;
-  if (!store.tables[k]) { const seed = REGISTRIES[reg].db.seed[name]; if (!seed) throw new TcxpError('Unknown table "' + name + '"'); store.tables[k] = seed.map(r => r.slice()); }
+  if (!store.tables[k]) { const r = own(REGISTRIES, reg); const seed = r && r.db ? own(r.db.seed, name) : undefined; if (!seed) throw new TcxpError('Unknown table "' + name + '"'); store.tables[k] = seed.map(r => r.slice()); }
   return store.tables[k];
 }
 function resetData(store) { (store || STORE).tables = {}; }
@@ -958,7 +1051,7 @@ function resetData(store) { (store || STORE).tables = {}; }
 const rowSet = rows => JSON.stringify(rows.map(r => JSON.stringify(r)).sort());
 function dataChanged(store) {
   store = store || STORE;
-  return Object.entries(store.tables).some(([k, rows]) => { const [reg, name] = k.split('/'); return rowSet(rows) !== rowSet(REGISTRIES[reg].db.seed[name]); });
+  return Object.entries(store.tables).some(([k, rows]) => { const [reg, name] = k.split('/'); return rowSet(rows) !== rowSet(own(own(REGISTRIES, reg).db.seed, name)); });
 }
 
 const isValidDate = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); if (!m) return false; const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3]; };
@@ -1002,12 +1095,12 @@ const showVal = v => v === null ? 'null' : typeof v === 'string' ? "'" + v + "'"
 // Compute what a write would do, check every constraint, and return the plan without applying it.
 function planWrite(tree, vals, store) {
   const p = tree.parsed, op = p.op, reg = p.registry, it = p.items;
-  const db = REGISTRIES[reg].db, tname = writeTable(p);
+  const db = own(REGISTRIES, reg).db, tname = writeTable(p);
   const t = db.schema.tables.find(x => x.name === tname);
   const cols = t.columns, flags = cols.map(colFlags), names = cols.map(c => c[0]);
   const idx = ref => names.indexOf(ref.name.split('.').pop());
   const rows = tableRows(reg, tname, store);
-  const asObj = r => { const o = {}; names.forEach((n, i) => { o[tname + '.' + n] = r[i]; }); return o; };
+  const asObj = r => { const o = dict(); names.forEach((n, i) => { o[tname + '.' + n] = r[i]; }); return o; };
   const ev = (n, r) => evalExpr(n, r ? asObj(r) : {}, {}, vals, [tname]);
   const working = rows.map(r => r.slice());
   const fail = (code, msg) => { throw new TcxpError(msg, tname, code); };
@@ -1181,6 +1274,18 @@ function applyEdit(uri, tree, op, i) {
       rest.splice(m < 0 ? rest.length : m, 0, {k: '$' + op.var, raw: '$' + op.var + '=' + raw});
       return joinPairs(head, rest);
     }
+    case 'param': {
+      if (tree.parsed.mode !== 'fn') fail('param sets a function parameter; this address is not a function');
+      const decl = tree.parsed.fn.params.find(x => x.name === op.name);
+      if (!decl) fail('"' + op.name + '" is not a parameter of this function. Parameters: ' + (tree.parsed.fn.params.map(x => x.name).join(', ') || 'none'));
+      const rest = pairs.filter(x => x.k !== op.name);
+      if (op.value === null || op.value === undefined) return joinPairs(head, rest);
+      const v = String(op.value);
+      if (decl.type !== 'text' && Number.isNaN(Number(v))) fail('parameter "' + op.name + '" expects a number, not ' + JSON.stringify(v));
+      const m = rest.findIndex(x => !isDataKey(x.k));
+      rest.splice(m < 0 ? rest.length : m, 0, {k: op.name, raw: op.name + '=' + (decl.type === 'text' ? encLiteral(v) : v)});
+      return joinPairs(head, rest);
+    }
     case 'unbind': {
       if (!pairs.some(p => p.k === '$' + op.var)) fail('$' + op.var + ' is not bound');
       return joinPairs(head, pairs.filter(p => p.k !== '$' + op.var));
@@ -1215,7 +1320,8 @@ function applyEdit(uri, tree, op, i) {
       if (!key || !isDataKey(key)) fail('add needs key, a data key such as order or where');
       const repl = parse1(String(op.expr), key);
       const list = tree.parsed.items[key];
-      const listy = tree.parsed.mode === 'sql' ? (CLAUSES[key] && (CLAUSES[key].list || CLAUSES[key].repeat)) : tree.parsed.mode === 'write' ? (WRITE_CLAUSES[tree.parsed.op][key] || {}).list : false;
+      const C = tree.parsed.mode === 'sql' ? own(CLAUSES, key) : tree.parsed.mode === 'write' ? own(WRITE_CLAUSES[tree.parsed.op], key) : undefined;
+      const listy = !!C && !!(C.list || C.repeat);
       if (list && !listy) fail(key + '= is already set and holds one expression; use replace');
       return withKey(uri, tree, key, (list || []).map(cloneNode).concat(repl));
     }
@@ -1234,7 +1340,7 @@ function applyEdit(uri, tree, op, i) {
       return setMeta(head, pairs, op.key, op.value);
     }
   }
-  throw editError(i, op, 'unknown op. Use bind, unbind, replace, remove, add, annotate or meta');
+  throw editError(i, op, 'unknown op. Use bind, unbind, param, replace, remove, add, annotate or meta');
 }
 function setMeta(head, pairs, key, value) {
   const rest = pairs.slice(); const at = rest.findIndex(p => p.k === '~' + key);
@@ -1270,6 +1376,28 @@ function edit(uri, ops, opts) {
   return {uri: cur, tree};
 }
 
+// recordDefaults: when intent rows default a variable, write that down. Adds one annotation per default
+// (id "default-<var>", on /$var) and, unless opts.pulse === false, a ~pulse whose row lists the defaults.
+// Meta only, so the identity is unchanged.
+function recordDefaults(uri, opts) {
+  opts = opts || {};
+  let tree = parseURI(uri);
+  const defaults = tree.defaults.map(d => ({var: d.var, value: d.value, row: d.row}));
+  if (!defaults.length) return {uri: serialize(tree).uri, tree, defaults};
+  const before = identity(tree);
+  const have = new Set(tree.spikes.map(sp => sp.id));
+  const ops = tree.defaults.filter(d => !have.has('default-' + d.var)).map(d => ({op: 'annotate', id: 'default-' + d.var, on: ['/$' + d.var],
+    meaning: '$' + d.var + ' was not given. Intent row ' + (d.row + 1) + (d.role ? ' (' + d.role + ')' : '') + ' defaulted it to ' + JSON.stringify(d.value) + '.', structure: null, environment: null}));
+  let cur = ops.length ? edit(uri, ops, {pulse: false}).uri : serialize(tree).uri;
+  if (opts.pulse !== false) {
+    const t = parseURI(cur); const prev = t.parsed.meta.find(m => m[0] === 'pulse');
+    const step = prev && Array.isArray(prev[1]) && prev[1][0] && Number.isInteger(prev[1][0].step) ? prev[1][0].step + 1 : 1;
+    cur = withPulse(t, step, opts.at, 0, before, {defaults});
+  }
+  tree = parseURI(cur);
+  return {uri: cur, tree, defaults};
+}
+
 // query(uri, selector) -> [{pointer, kind, label}]. Every pointer resolves with resolvePointer.
 function nodeLabel(n) {
   if (n.kind === 'operator') return n.op;
@@ -1288,7 +1416,8 @@ function allPointers(tree) {
 function query(uri, selector) {
   const tree = typeof uri === 'string' ? parseURI(uri) : uri;
   const [what, arg] = String(selector).split(/:(.*)/s);
-  const pick = test => allPointers(tree).filter(x => test(x.node)).map(x => ({pointer: x.pointer, kind: nodeKindOf(x.node), label: nodeLabel(x.node)}));
+  const pick = test => allPointers(tree).filter(x => test(x.node)).map(x => ({pointer: x.pointer, kind: nodeKindOf(x.node), label: nodeLabel(x.node)}))
+    .concat((tree.intentSlots || []).filter(test).map(n => ({pointer: '/$' + n.name, kind: nodeKindOf(n), label: nodeLabel(n), source: 'intent'})));
   switch (what) {
     case 'gaps': return pick(n => n.kind === 'slot' && !n.param && !n.children.length).concat(
       tree.parsed.mode === 'fn' ? pick(n => n.kind === 'slot' && n.param && !n.children.length) : []);
@@ -1308,13 +1437,13 @@ function fromJSON(j) {
   const jt = n => n.kind === 'value' ? exprValText(n) : n.kind === 'slot' ? '$' + n.name : n.kind === 'reference' ? n.name : n.op + '(' + (n.children || []).map(jt).join(',') + ')';
   const callText = c => { const [h, ...params] = c.children; return CALL + SCHEME + h.name + (params.filter(p => p.children).length ? '?' + params.filter(p => p.children).map(p => p.name + '=' + encLiteral(String(p.children[0].value))).join('&') : ''); };
   (function collect(n) {
-    if (n.kind === 'slot' && !n.param && n.children && !seen.has(n.name)) {
+    if (n.kind === 'slot' && !n.param && n.children && !n.children[0].default && !seen.has(n.name)) {
       seen.add(n.name); const b = n.children[0];
       binds.push('$' + n.name + '=' + (b.kind === 'operator' && b.op === 'call' ? callText(b).replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23') : jt(b)));
       return;
     }
     (n.children || []).forEach(collect);
-  })(j.profile === 'fn' ? {children: []} : j.tree);   // a function's parameter slots are keys, not $bindings
+  })({children: (j.profile === 'fn' ? [] : [j.tree]).concat(j.requires || [], j.extra_bindings || [])});   // a function's parameter slots are keys, not $bindings
   const clause = c => c.op.slice('clause:'.length);
   if (j.profile === 'sql' || j.profile === 'write') j.tree.children.forEach(c => {
     if (c.op.startsWith('clause:')) pairs.push(clause(c) + '=' + c.children.map(jt).join(','));
@@ -1365,12 +1494,12 @@ function registerCSV(registry, table, csvText, types) {
     if (b === 'date' && !isValidDate(v)) throw new TcxpError('CSV row ' + (n + 2) + ', column ' + header[i] + ': "' + v + '" is not a date (YYYY-MM-DD)');
     return v;
   })));
-  const reg = REGISTRIES[registry] || (REGISTRIES[registry] = {title: registry, description: 'Registry with data loaded from CSV.', fns: {}, notes: {}});
-  if (!reg.db) reg.db = {schema: {name: registry, description: 'Tables loaded from CSV files.', tables: []}, seed: {}};
+  const reg = own(REGISTRIES, registry) || setOwn(REGISTRIES, registry, {title: registry, description: 'Registry with data loaded from CSV.', fns: dict(), notes: dict()});
+  if (!reg.db) reg.db = {schema: {name: registry, description: 'Tables loaded from CSV files.', tables: []}, seed: dict()};
   const def = {name: table, description: 'Loaded from CSV (' + seed.length + ' rows). row_id numbers the rows in file order.',
     columns: [['row_id', 'integer', 'PRIMARY KEY', 'Row number in the file, 1 to n.']].concat(header.map((h, i) => [h, colTypes[i], '', 'CSV column "' + rows[0][i].trim() + '".']))};
   reg.db.schema.tables = reg.db.schema.tables.filter(t => t.name !== table).concat([def]);
-  reg.db.seed[table] = seed;
+  setOwn(reg.db.seed, table, seed);
   delete STORE.tables[registry + '/' + table];
   return def;
 }

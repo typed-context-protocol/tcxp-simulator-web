@@ -69,6 +69,8 @@ function loadURI(uri) {
   $('#uri-input').value = uri; markCurrent(); update(uri);
 }
 const metaOf = (tree, key) => { const m = tree.parsed.meta.find(x => x[0] === key); return m ? m[1] : undefined; };
+// ~intent is a string (legacy) or rows; the label is the string or the user row's text.
+const intentLabel = tree => { const v = metaOf(tree, 'intent'); if (typeof v === 'string') return v; const u = Array.isArray(v) ? v.find(r => r && r.role === 'user' && typeof r.text === 'string') : null; return u ? u.text : null; };
 
 function update(uri) {
   state.uri = uri.trim();
@@ -78,7 +80,8 @@ function update(uri) {
   try { tree = T.parseURI(state.uri); } catch (e) { err = e; }
   state.tree = tree;
   const intentMeta = tree ? metaOf(tree, 'intent') : undefined;
-  const intentText = intentMeta || (q ? q.intent : null);
+  const userRow = Array.isArray(intentMeta) ? intentMeta.find(r => r && r.role === 'user' && typeof r.text === 'string') : null;
+  const intentText = (typeof intentMeta === 'string' ? intentMeta : userRow ? userRow.text : null) || (q ? q.intent : null);
   const sub = q ? q.title + (q.uri !== state.uri ? ' · edited' : '') : (tree ? tree.parsed.registry + '/' + tree.parsed.path : 'Address');
   $('#intent').innerHTML = intentText ? `${esc(intentText)}<small>${esc(sub)}</small>` : `${esc(sub)}<small>No ~intent on this address</small>`;
   if (!tree) {
@@ -98,6 +101,10 @@ function update(uri) {
   const diags = tree.diagnostics.slice();
   if (ser.uri !== state.uri) diags.push({level: 'info', msg: 'Canonical form differs from what was typed (spacing, key order or encoding). The colored line is the canonical form.'});
   $('#diags').innerHTML = diags.map(d => `<li class="diag ${d.level}">${esc(d.msg)}</li>`).join('');
+  // A default from an intent row is never silent: write its annotation into the address once (meta only).
+  if (tree.defaults && tree.defaults.length && tree.defaults.some(d => !tree.spikes.some(sp => sp.id === 'default-' + d.var))) {
+    try { const rec = T.recordDefaults(state.uri, {pulse: false}); $('#uri-input').value = rec.uri; update(rec.uri); return; } catch (e) {}
+  }
   renderTree(tree);
   renderFind();
   renderResult(tree);
@@ -127,8 +134,10 @@ function nodeText(n) {
   }
   if (n.kind === 'slot') {
     const t = n.type ? T.baseType(n.type) : 'untyped';
-    return [(n.param ? '' : '$') + n.name, n.children.length ? t : 'gap · ' + t];
+    if (n.advisory) return ['$' + n.name, 'warn only · not bound'];
+    return [(n.param ? '' : '$') + n.name, n.children.length ? (n.children[0].defaulted ? 'default · ' + t : t) : 'gap · ' + t];
   }
+  if (n.kind === 'value' && n.defaulted) return [String(n.value), 'default from ~intent'];
   if (n.kind === 'value') return [n.value === null ? 'null' : n.type === 'text' ? `'${n.value}'` : String(n.value), n.type];
   return ['?', ''];
 }
@@ -142,7 +151,7 @@ function renderTree(tree) {
     if (!annotated.get(n).includes(sp.id)) annotated.get(n).push(sp.id);
   })));
   function prep(n) {
-    counts[nodeKind(n)]++;
+    if (!n.synthetic) counts[nodeKind(n)]++;
     if (n.kind === 'slot' && n.children[0] && bindings[n.name] && bindings[n.name].kind !== 'call' && !n.children[0]._id) n.children[0]._id = bindings[n.name]._id;
     const [a, b] = nodeText(n); n._t = [a, b];
     n._w = Math.max(44, Math.ceil(Math.max(a.length * CH, (b || '').length * CH2) + 26));
@@ -161,10 +170,13 @@ function renderTree(tree) {
     kids.forEach(k => { place(k, cx, depth + 1); cx += k._tw + GAP; });
     n._x = (kids[0]._x + kids[kids.length - 1]._x) / 2;
   }
-  prep(tree.root); place(tree.root, PAD, 0);
+  // Variables an ~intent row requires but the query never uses hang under a REQUIRES node beside the query tree.
+  const top = tree.intentSlots && tree.intentSlots.length
+    ? {kind: 'operator', op: 'intent', label: 'ADDRESS', synthetic: true, children: [tree.root, {kind: 'operator', op: 'requires', label: 'REQUIRED BY ~intent', synthetic: true, children: tree.intentSlots}]} : tree.root;
+  prep(top); place(top, PAD, 0);
   let maxY = 0; const nodes = [], edges = [];
-  (function walk(n) { nodes.push(n); maxY = Math.max(maxY, n._y + n._h); (n.children || []).forEach(k => { edges.push([n, k]); walk(k); }); })(tree.root);
-  const W = Math.ceil(tree.root._tw + PAD * 2), H = Math.ceil(maxY + PAD);
+  (function walk(n) { nodes.push(n); maxY = Math.max(maxY, n._y + n._h); (n.children || []).forEach(k => { edges.push([n, k]); walk(k); }); })(top);
+  const W = Math.ceil(top._tw + PAD * 2), H = Math.ceil(maxY + PAD);
   const e = edges.map(([p, c]) => {
     const y1 = p._y + p._h, y2 = c._y, my = (y1 + y2) / 2;
     return `<path class="edge${p.kind === 'slot' ? ' bind' : ''}" d="M${p._x} ${y1} C ${p._x} ${my}, ${c._x} ${my}, ${c._x} ${y2}"/>`;
@@ -184,7 +196,7 @@ function renderTree(tree) {
   const sc = $('#tree-scroll');
   sc.innerHTML = `<svg id="tree" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Expression tree with ${nodes.length} nodes">${e}${nd}</svg>`;
   sc.classList.toggle('fit', state.fit);
-  sc.scrollLeft = Math.max(0, tree.root._x - sc.clientWidth / 2); sc.scrollTop = 0;
+  sc.scrollLeft = Math.max(0, top._x - sc.clientWidth / 2); sc.scrollTop = 0;
   $('#legend').innerHTML = `
     <span><i class="chip operator"></i>Operators <b>${counts.operator}</b></span>
     <span><i class="chip value"></i>Values <b>${counts.value}</b></span>
@@ -223,13 +235,14 @@ const norm = v => {
 };
 const unordered = rs => JSON.stringify(rs.map(r => JSON.stringify(r)).sort());
 function snapshotCheck(tree, res) {
-  const s = SNAP.results[T.identity(tree)];
+  const s = SNAP.results[T.resultKey(tree)];
   if (!s) return null;
   if (res.kind === 'preview' || res.kind === 'write') {
     if (s.kind !== 'write') return false;
     return res.count === s.count && JSON.stringify(res.returning.columns) === JSON.stringify(s.columns) && unordered(res.returning.rows.map(r => r.map(norm))) === unordered(s.rows);
   }
   if (res.kind === 'error') return s.kind === 'error' && s.code === res.code;
+  if (res.kind === 'ask') return s.kind === 'ask' && s.question === res.question && JSON.stringify(s.gaps) === JSON.stringify(res.gaps);
   if (s.kind !== res.kind) return false;
   if (s.kind === 'gap') return JSON.stringify(s.gaps) === JSON.stringify(res.gaps);
   if (s.kind === 'value') return norm(res.value) === s.value;
@@ -285,7 +298,11 @@ function renderResult(tree) {
   try { res = T.execute(tree); } catch (e) { title.textContent = 'Result'; card.innerHTML = `<div class="err-box">${esc(e.message)}</div>`; return; }
   state.result = res;
   const mode = tree.parsed.mode;
-  if (res.kind === 'gap') {
+  if (res.kind === 'ask') {
+    title.textContent = 'Asked before running';
+    card.innerHTML = `<div class="askbox"><div class="q">${esc(res.question)}</div><div class="who">${res.questions.map(x => `Intent row ${x.row + 1}${x.role ? ' (' + esc(x.role) + ')' : ''} requires <code>$${esc(x.var)}</code>`).join(' · ')}. Nothing runs until it is answered.</div></div>` +
+      gapPanel(tree) + `<div class="status-line">${badge(tree, res)}</div>`;
+  } else if (res.kind === 'gap') {
     title.textContent = mode === 'math' ? 'Decide (if)' : 'Result';
     card.innerHTML = (mode === 'math' ? decidePanel(tree, null) : '') + gapPanel(tree) + `<div class="status-line">${badge(tree, res)}</div>`;
   } else if (res.kind === 'value') {
@@ -305,6 +322,7 @@ function renderResult(tree) {
     title.textContent = 'Result';
     card.innerHTML = resultTable(res.columns, res.rows) + `<div class="status-line"><span>${res.rows.length} row${res.rows.length === 1 ? '' : 's'}, computed in this page by evaluating the tree</span>${badge(tree, res)}</div>`;
   }
+  if (res.defaults || res.warnings) card.insertAdjacentHTML('afterbegin', intentNotes(res));
   card.querySelectorAll('form[data-gap]').forEach(f => f.addEventListener('submit', ev => {
     ev.preventDefault();
     const input = f.querySelector('input'); if (!input.value.trim()) { input.focus(); return; }
@@ -373,6 +391,10 @@ function renderWrite(tree, card, title) {
     else if (act === 'undo') { res.inverse.forEach(u => T.execute(T.parseURI(u))); state.lastWrite = null; refreshCounts(); loadURI(plainOf(tree)); }
     else if (act === 'reset') { T.resetData(); state.lastWrite = null; refreshCounts(); update(state.uri); }
   }));
+}
+function intentNotes(res) {
+  return (res.defaults || []).map(d => `<div class="write-note">Defaulted: <code>$${esc(d.var)}</code> was not given, so intent row ${d.row + 1} used <b>${esc(JSON.stringify(d.value))}</b>. This is recorded as an annotation and in the pulse.</div>`).join('') +
+    (res.warnings || []).map(w => `<div class="write-note">Warning from intent row ${w.row + 1}: <code>$${esc(w.var)}</code> is not bound. ${esc(w.text)}</div>`).join('');
 }
 function decidePanel(tree, decision) {
   const q = T.toMath(tree, true);
@@ -456,9 +478,11 @@ function commitPulse(tree) {
   const at = new Date().toISOString();
   const parent = last ? last.identity : null;
   const id = T.identity(tree);
-  const wrote = state.lastWrite && state.lastWrite.identity === id ? {undo: state.lastWrite.res.inverse} : null;
-  const uri = T.withPulse(tree, state.step, at, T.DEBOUNCE_MS, parent, wrote);
-  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, undo: wrote ? wrote.undo : null, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: (metaOf(tree, 'intent') || tree.parsed.registry + '/' + tree.parsed.path)});
+  const wrote = Object.assign({}, state.lastWrite && state.lastWrite.identity === id ? {undo: state.lastWrite.res.inverse} : {},
+    tree.defaults && tree.defaults.length ? {defaults: tree.defaults.map(d => ({var: d.var, value: d.value, row: d.row}))} : {});
+  const extra = Object.keys(wrote).length ? wrote : null;
+  const uri = T.withPulse(tree, state.step, at, T.DEBOUNCE_MS, parent, extra);
+  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, undo: wrote.undo || null, defaults: wrote.defaults || null, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: intentLabel(tree) || tree.parsed.registry + '/' + tree.parsed.path});
   renderPulses(); syncAddressBar();
 }
 function renderPulses() {
@@ -517,7 +541,7 @@ function runTests() {
       let r;
       try { r = T.execute(tree, {store: T.newStore()}); }
       catch (e) { if (!e.code) throw e; r = {kind: 'error', code: e.code}; }
-      kind = r.kind === 'error' ? 'error ' + r.code : r.kind;
+      kind = r.kind === 'error' ? 'error ' + r.code : r.kind === 'ask' ? 'ask: nothing runs' : r.kind;
       res = snapshotCheck(tree, r) === true;
     } catch (e) { note = e.message; }
     const all = parse && rt && strict && ref !== false && res; if (all) qPass++;
@@ -532,7 +556,10 @@ function runTests() {
   const check = (name, why, fn) => { let pass = 0, total = 0; trees.forEach(t => { const r = fn(t); if (r === null) return; total++; if (r) pass++; }); inv.push([name, why, pass, total]); };
   check('Identity ignores meta', 'Removing every ~key leaves the identity unchanged', t => {
     if (!t.parsed.meta.length) return null;
-    const stripped = T.serialize(t).uri.split(/[?&]/).filter((p, i) => i === 0 || !p.startsWith('~')).reduce((a, p, i) => i === 0 ? p : a + (a.includes('?') ? '&' : '?') + p, '');
+    // Split only the query part, and only on "&": a meta value may contain "?" (canonical form escapes only % & #).
+    const u = T.serialize(t).uri, qi = u.indexOf('?');
+    const kept = u.slice(qi + 1).split('&').filter(p => !p.startsWith('~'));
+    const stripped = u.slice(0, qi) + (kept.length ? '?' + kept.join('&') : '');
     return T.identity(T.parseURI(stripped)) === T.identity(t);
   });
   const PARENT = T.identity(trees[0]);
@@ -544,7 +571,8 @@ function runTests() {
     inv.push(['Every parent is an earlier pulse', 'In a pulse chain, each parent equals the identity of an earlier pulse (the first has parent null)', pass, chain.length]); }
   check('Every pointer resolves', 'Each annotation pointer lands on at least one node', t => t.spikes.length ? t.spikes.every(sp => sp.data) : null);
   check('Every lit facet resolves', 'Facet addresses resolve to notes in a registry', t => t.spikes.length ? t.spikes.every(sp => !sp.problems.length) : null);
-  check('Gaps block execution', 'Any unbound variable makes execute() return a gap and run nothing, writes included', t => { if (!t.gaps.length) return null; const st = T.newStore(); return T.execute(t, {store: st}).kind === 'gap' && !T.dataChanged(st); });
+  check('Gaps block execution', 'Any unbound variable makes execute() return a gap (or, when an intent row says ASK, an ask) and run nothing, writes included', t => { if (!t.gaps.length) return null; const st = T.newStore(); const k = T.execute(t, {store: st}).kind; return (k === 'gap' || k === 'ask') && !T.dataChanged(st); });
+  check('Intent rows never change identity', 'Removing ~intent (string or rows) leaves the identity unchanged', t => { const m = t.parsed.meta.find(x => x[0] === 'intent'); if (!m) return null; return T.identity(T.edit(T.serialize(t).uri, [{op: 'meta', key: 'intent', value: null}], {pulse: false}).tree) === T.identity(t); });
   check('Bound trees have no gaps', 'With every variable bound, execution produces a result or a plain-language refusal, never a gap', t => { if (t.gaps.length) return null; try { return T.execute(t, {store: T.newStore()}).kind !== 'gap'; } catch (e) { return !!e.code; } });
   check('A preview never writes', 'Running a write address without @ changes no data', t => { if (t.parsed.mode !== 'write' || t.gaps.length) return null; const st = T.newStore(); try { T.execute(t, {store: st, preview: true}); } catch (e) { if (!e.code) return false; } return !T.dataChanged(st); });
   check('Inverse restores the data', 'Applying a write and then its inverse addresses leaves every table as it was', t => {
@@ -649,7 +677,7 @@ function init() {
   $('#reset-uri').addEventListener('click', () => selectQuery(state.queryId, {noScroll: true}));
   $('#copy-uri').addEventListener('click', e => copy(state.uri, e.currentTarget));
   $('#copy-fiber').addEventListener('click', e => { const f = state.fibers[state.fiber]; if (f) copy(f.text, e.currentTarget); });
-  $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify(Object.assign({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent}, p.undo ? {undo: p.undo} : {}, {identity: p.identity, uri: p.uri}))).join('\n'), e.currentTarget));
+  $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify(Object.assign({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent}, p.undo ? {undo: p.undo} : {}, p.defaults ? {defaults: p.defaults} : {}, {identity: p.identity, uri: p.uri}))).join('\n'), e.currentTarget));
   $('#fiber-tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (!b) return; state.fiber = b.dataset.f; $('#fiber-tabs').querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === b))); $('#fiber-body').innerHTML = state.fibers[state.fiber].html; });
   $('#pulses').addEventListener('click', e => { const li = e.target.closest('.pulse'); if (!li) return; const p = state.pulses.find(x => x.step === +li.dataset.step); if (p) loadURI(p.uri); });
   $('#find-form').addEventListener('submit', e => e.preventDefault());

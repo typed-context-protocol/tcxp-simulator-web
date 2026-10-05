@@ -33,13 +33,13 @@ async function checkWrite(c, tree) {
   const pg = new PGlite(); await pg.exec(T.fullDDL(tree.parsed.registry));
   const w = await compareWrite(T, pg, plain, at);
   await pg.close();
-  [T.identity(plain), T.identity(at)].forEach(k => { results[k] = w.result; });
+  [T.resultKey(plain), T.resultKey(at)].forEach(k => { results[k] = w.result; });
   return w;
 }
 for (const c of cases) {
   try {
     const tree = T.parseURI(c.uri);
-    const id = T.identity(tree);
+    const id = T.resultKey(tree);
     const rt = T.serialize(tree).uri === c.uri;
     const strictRt = T.serialize(T.parseURI(T.strictForm(c.uri))).uri === c.uri;
     const mem = tree.parsed.mode === 'write' ? null : T.execute(tree);
@@ -49,6 +49,10 @@ for (const c of cases) {
       writeCases++;
       const w = await checkWrite(c, tree); ok = ok && w.ok; detail = w.detail;
       if (c.ref) { const inl = T.toSQL(tree, {inline: true}).sql.replace(/\s+/g, ' '); if (inl !== c.ref) { ok = false; console.log('  inline:', inl, '\n  ref:   ', c.ref); } }
+    } else if (mem.kind === 'ask') {
+      // An intent row's ASK: nothing runs, the row's question comes back.
+      results[id] = {kind: 'ask', question: mem.question, gaps: mem.gaps};
+      detail = 'ask $' + mem.gaps.join(',$') + ': ' + mem.question.slice(0, 40) + '…';
     } else if (mem.kind === 'gap') {
       results[id] = {kind: 'gap', gaps: mem.gaps};
       detail = 'gap ' + mem.gaps.join(',');

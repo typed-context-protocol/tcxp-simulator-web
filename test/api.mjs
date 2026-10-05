@@ -5,6 +5,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { createRequire } from 'module';
 import { nv } from './writes-lib.mjs';
+import { NAMES, nameCases } from './names-cases.mjs';
 const T = createRequire(import.meta.url)('../tcxp.js');
 const ARGS = process.argv.slice(2).filter(a => !a.startsWith('--'));
 const N = Number(ARGS[0] || 500), SEED = Number(ARGS[1] || 23);
@@ -92,6 +93,31 @@ for (const uri of corpus) {
   let threw = false; try { T.registerCSV('csvtest.demo', 'bad', 'a,b\n1,2,3\n'); } catch (e) { threw = e instanceof T.TcxpError; }
   tally('registerCSV rejects ragged rows', threw);
   delete T.REGISTRIES['csvtest.demo'];
+}
+// 5. JavaScript-special names (constructor, __proto__, …) behave exactly like an ordinary unknown name in every
+//    position: same outcome as the control name "plain_name", never a JS error or a prototype member read as data.
+{
+  const outcome = (uri, n) => {
+    const norm = x => String(x).split(n).join('NAME');
+    try {
+      const t = T.parseURI(uri);
+      const r = (() => { try { return T.execute(t, {store: T.newStore()}); } catch (e) { return {kind: e instanceof T.TcxpError ? 'tcxp-error' : 'JS-ERROR', msg: e.message}; } })();
+      T.toSQL(t); T.toJSON(t); T.query(t, 'variables'); T.fromJSON(JSON.parse(JSON.stringify(T.toJSON(t))));
+      return norm(JSON.stringify({diag: t.diagnostics.filter(d => d.level !== 'info').map(d => d.level + ':' + d.msg), kind: r.kind, msg: r.msg, gaps: r.gaps, rows: r.rows ? r.rows.length : undefined, value: r.value}));
+    } catch (e) { return norm((e instanceof T.TcxpError ? 'tcxp-error: ' : 'JS-ERROR: ') + e.message); }
+  };
+  for (const n of NAMES) for (const [where, uri] of nameCases(n)) {
+    const control = nameCases('plain_name').find(c => c[0] === where)[1];
+    const got = outcome(uri, n), want = outcome(control, 'plain_name');
+    tally('JS-special names behave like ordinary names', got === want && !got.includes('JS-ERROR'), n + ' / ' + where + '\n   got  ' + got + '\n   want ' + want);
+  }
+  for (const n of NAMES) {
+    let ok = true;
+    try { T.registerCSV(n, n, 'a,b\n1,x\n'); const t = T.parseURI('!tcxp:/' + n + '/sql/select?cols=*&from=' + n); ok = T.execute(t, {store: T.newStore()}).rows.length === 1 && !Object.hasOwn(Object.prototype, 'a'); }
+    catch (e) { ok = e instanceof T.TcxpError; }
+    finally { if (Object.hasOwn(T.REGISTRIES, n)) delete T.REGISTRIES[n]; }
+    tally('registerCSV with a JS-special registry and table name', ok && Object.getPrototypeOf(T.REGISTRIES) === Object.prototype, n);
+  }
 }
 console.log(Object.entries(res).map(([k, v]) => (v.pass === v.total ? 'ok  ' : 'FAIL') + ' ' + k + ': ' + v.pass + '/' + v.total).join('\n'));
 console.log(JSON.stringify({api: 'phase-b', seed: SEED, addresses: corpus.length, editsApplied: applied, editsRefused: refused, failures: fail}));

@@ -89,6 +89,11 @@ const F = '!tcxp:/firm.demo/sql/select?';
 const W = '!tcxp:/school.demo/sql/';
 const WF = '!tcxp:/firm.demo/sql/';
 const C = '!tcxp:/client.demo/sql/select?';
+const CSV_TAX = "cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))";
+const CSV_ALL = "cols=as(sum(hours),us_hours)&from=client_hours&where=eq(work_country,'US')";
+const USER_ROW = {role: 'user', text: 'What are the US hours worked in my client CSV?'};
+const MANAGER_ROW = {role: 'manager', text: 'Before submitting, the user must state the tax year they are referencing.', require: '$tax_year', if_empty: 'ASK'};
+const intentRows = rows => '~intent=' + enc(JSON.stringify(rows));
 const enc = s => s.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23');
 const spikes = rows => '~spikes=' + enc(JSON.stringify(rows));
 const intent = t => '~intent=' + enc(t);
@@ -195,9 +200,25 @@ const QUERIES = [
     'SELECT employee, work_country, sum(hours) AS total_hours, count(*) AS days FROM client_hours GROUP BY employee, work_country ORDER BY employee ASC, work_country ASC'),
   Q('csv-insert-row','csv','Add a day to the client CSV (write)','Add a 6-hour US day for Ana Ruiz on 2025-10-01.',
     '!tcxp:/client.demo/sql/insert?into=client_hours&cols=row_id,employee,date,hours,work_country&values=row(23,$who,$day,6,\'US\')&returning=*&$who=\'Ana Ruiz\'&$day=date\'2025-10-01\'',
-    "INSERT INTO client_hours (row_id, employee, date, hours, work_country) VALUES (23, 'Ana Ruiz', DATE '2025-10-01', 6, 'US') RETURNING *")
+    "INSERT INTO client_hours (row_id, employee, date, hours, work_country) VALUES (23, 'Ana Ruiz', DATE '2025-10-01', 6, 'US') RETURNING *"),
+  // v0.2 intent rows: ~intent as an array. The manager's row requires $tax_year; until it is bound nothing runs.
+  Q('intent-ask','intent','US hours: the manager asks for the tax year','What are the US hours worked in my client CSV?',
+    C + CSV_TAX + '&' + intentRows([USER_ROW, MANAGER_ROW])),
+  Q('intent-answered','intent','US hours: tax year given, it runs','What are the US hours worked in my client CSV? (2024)',
+    C + CSV_TAX + '&$tax_year=2024&' + intentRows([USER_ROW, MANAGER_ROW]),
+    "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024"),
+  Q('intent-require-only','intent','Required even though the query never uses it','What are the US hours worked in my client CSV, all years?',
+    C + CSV_ALL + '&' + intentRows([USER_ROW, MANAGER_ROW])),
+  Q('intent-require-only-bound','intent','Required, bound, and the query runs unchanged','What are the US hours worked in my client CSV, all years? (tax year 2024 stated)',
+    C + CSV_ALL + '&$tax_year=2024&' + intentRows([USER_ROW, MANAGER_ROW]),
+    "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US'"),
+  Q('intent-block','intent','The manager blocks instead of asking','What are the US hours worked in my client CSV?',
+    C + CSV_TAX + '&' + intentRows([USER_ROW, Object.assign({}, MANAGER_ROW, {if_empty: 'BLOCK'})])),
+  Q('intent-default','intent','The manager defaults the tax year, on the record','What are the US hours worked in my client CSV?',
+    C + CSV_TAX + '&' + intentRows([USER_ROW, Object.assign({}, MANAGER_ROW, {if_empty: 'DEFAULT', default: 2024, text: 'If the user does not state a tax year, use 2024 and say so.'})]),
+    "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024")
 ];
 const GROUPS = [
   ['students','School · students table'],['submissions','School · submissions table'],['joins','School · joins'],
-  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes'],['csv','Client CSV']
+  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes'],['csv','Client CSV'],['intent','Intent rows']
 ];

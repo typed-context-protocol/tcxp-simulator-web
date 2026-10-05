@@ -77,7 +77,7 @@ Meta values are readable JSON. A list is a JSON array of flat rows, one object p
 |---|---|---|
 | `~pulse` | `[{"step":n,"at":"ISO 8601 ms","debounce_ms":300,"parent":"identity"\|null}]` | One movement of the local system. `step` counts committed addresses, not keystrokes. A commit happens after a `debounce_ms` quiet period. `parent` is the identity (§8) of the previous committed state, or `null` for the first, so following parents traces how a change travels through a chain of decisions. A row without `parent` (written before it existed) reads as `null`. |
 | `~pulse` field `undo` | `["@!tcxp:/…", …]` | Present only on the pulse of an executed write (§12): the inverse addresses that undo it, in order. |
-| `~intent` | text | The natural-language question this state answers |
+| `~intent` | text, or rows (§14) | The natural-language question this state answers. As rows, it can also require variables before anything runs. |
 | `~spikes` | `[{"id","on":[pointers],"meaning","structure","environment"}]` | Annotations (see §7) |
 | `~observe` | `[{"from","to","channel"}]` | A communication event: sender, receiver, channel |
 | `~outcome` | `[{"amount","currency"}]` | Money tied to the decision, for later reward and regret analysis |
@@ -123,6 +123,8 @@ A *reason card* is a spike whose meaning facet carries the human-readable defini
 | Every pulse `parent` is the identity of an earlier pulse in the chain | Tested on a chain through the 20 collection addresses; target for a Lean proof |
 | Gaps block writes: no preview, and nothing applied | By construction; tested; proved in Lean for a keyed-table model (`gap_blocks_write`) |
 | A write's inverse restores the data | Tested against PostgreSQL 18.3 on 7 collection writes and 622 generated writes; proved in Lean for a keyed-table model (exact for insert and update, up to row order for delete) |
+| Intent rows never change identity | By construction (meta); tested on 539 addresses with random rows added and removed |
+| A variable an intent row requires blocks execution until bound (ASK → ask, BLOCK → gap) | By construction; tested on 539 addresses, writes included |
 | Writes and their failures agree with PostgreSQL | Tested: same affected count, RETURNING rows and table contents, or the same SQLSTATE, on every collection write and 1,000 generated writes. Evidence, not proof |
 | SQL fiber and tree evaluator agree | Tested against PostgreSQL 18.3: 49 fixed cases and 1,918 generated cases, all matching. Evidence, not proof |
 | Persistence | An address is a string; store it anywhere |
@@ -141,6 +143,7 @@ These are declared out of scope, and the test suite lists them: table aliases, D
 - **Execution:** `execute(tree, {store, preview})`, `withPulse(tree, step, at, debounce, parent, extra)`
 - **Session data:** `newStore`, `resetData`, `dataChanged`, `tableRows`
 - **Edit and query (v0.2, §13):** `edit(uri, ops, opts)`, `query(uri, selector)`, `fromJSON(json)`, `exprText(node)`
+- **Intent rows (v0.2, §14):** `recordDefaults(uri, opts)`, `resultKey(tree)`
 - **Data sources (v0.2, §13):** `registerCSV(registry, table, csvText, types)`
 - **Testing:** `FilterGenerator` (seeded random addresses; `nextWrite()` for random writes; `FilterGenerator.filter(uri)` to check any address against the rules)
 
@@ -198,6 +201,7 @@ One way to change any address, and one way to search it. Both work on any profil
 |---|---|
 | `{op:"bind", var:"tax_year", value:"2024"}` | Bind `$tax_year`. `value` is the literal as written in an expression (`2024`, `'2026-fall'`, `date'2026-01-31'`, or an `@!tcxp:/…` call); `edit` does the percent-encoding. The variable must occur in the tree (or be required by an intent row, §14). |
 | `{op:"unbind", var:"tax_year"}` | Remove the binding; the variable becomes a gap again. |
+| `{op:"param", name:"do", value:"world"}` | Set a function parameter (`null` clears it, leaving a gap). The counterpart of `bind` for function addresses. |
 | `{op:"replace", path:"/where/0/1", expr:"eq(a,$b)"}` | Replace the node at the pointer. A path of just `/key` replaces the whole value. Paths into a bound value are refused (use `bind`). |
 | `{op:"remove", path:"/order"}` | Remove a key, a list item (`/cols/1`), an operand (`/where/0/2`), a binding (`/$x`) or a meta key (`/~intent`). |
 | `{op:"add", key:"order", expr:"desc(gpa)"}` | Add a data key, or append to a list key (`cols`, `order`, `group`, `join`, `values`, `set`, `returning`). Adding to a single-valued key that is already set is refused (use `replace`). |
@@ -213,3 +217,37 @@ Unless `opts.pulse === false`, each `edit` call stamps a new `~pulse` row: `step
 **`fromJSON(json)`** is the inverse of `toJSON`: it rebuilds the address from the profile, the tree and the meta alone (it does not read `toJSON`'s `address` field). `identity(fromJSON(toJSON(t))) = identity(t)`, and the full canonical address is preserved too.
 
 **CSV as a data source.** `registerCSV(registry, table, csvText, types)` creates a table that `sql/select` and the write profiles use like any other. The first row is the header; names are lower-cased and non-alphanumerics become `_`. RFC 4180 quoting is supported; an empty cell is `null`. Column types are inferred (`integer`, `numeric`, `date`, else `text`) unless `types` gives them (`{hours: "numeric(6,2)"}`). Because CSV rows have no identity of their own, the table gets a first column `row_id integer PRIMARY KEY` numbering the rows 1 to n; that keeps write inverses exact when two rows are identical. The registry `client.demo` holds `client_hours` (employee, date, hours, work_country), loaded this way, and is verified in PostgreSQL by loading the same rows through the generated DDL and inserts.
+
+## 14. Intent rows (added in v0.2)
+
+`~intent` takes either form:
+
+- **A string** (v0.1): one user row, no requirements. It serializes as a string, so every v0.1 address is unchanged.
+- **An array of flat rows:** `{"role":"user"|"manager"|…, "text":…, "require":"$var" or ["$a","$b"], "if_empty":"ASK"|"BLOCK"|"DEFAULT"|"WARN", "default":…}`. Only `require` gives a row force; a row without it (a user's question, a note) changes nothing.
+
+**Semantics.**
+
+- Each `require` names a variable that must be bound before anything runs, **even if the query never uses it**. A required variable the query does not use gets its own variable node beside the query tree, so `/$name` resolves to it, it can be annotated and bound (`edit` `bind` accepts it), and `query(…, "gaps")` lists it.
+- A required variable that is not bound is a **gap whose source is the intent row**. What happens next is the row's `if_empty`:
+  - `ASK` returns result kind `ask`: `{kind:"ask", question: <the row's text>, questions:[{var, text, role, row}], gaps}`. Nothing runs.
+  - `BLOCK` (the default when `if_empty` is absent) returns kind `gap`. Nothing runs.
+  - `DEFAULT` binds the row's `default` (a number, text or true/false). The default is never written into the address as `$var=`, so the identity is unchanged, and it is never silent: the result carries `defaults:[{var, value, row}]`, and `recordDefaults(uri)` writes an annotation (`id:"default-<var>"`, `on:["/$var"]`) and stamps a `~pulse` whose row carries `defaults`. The workbench does this the first time it shows such an address.
+  - `WARN` (advisory, kept for applications such as the tax intake demo) does not block a variable that only the intent row mentions; the result carries `warnings:[{var, text, row}]`. A variable the query itself uses is still a gap when unbound, whatever the row says.
+- When several rows require the same variable, the strictest wins: `BLOCK` > `ASK` > `DEFAULT` > `WARN`. When several variables are missing, the result is `ask` if at least one has an `ASK` row and none has a `BLOCK` row; otherwise `gap`.
+- A malformed row (`require` not of the form `"$name"`, an unknown `if_empty`, `DEFAULT` without a `default`) is an error diagnostic, so it cannot be ignored silently.
+
+**Identity.** Intent rows are meta, so adding, changing or removing them never changes the identity (decided for v0.2). They can still decide *whether* a state runs. Two snapshots with the same identity can therefore halt or run differently. Anything that stores a result next to an identity must key it with `resultKey(tree)`: the identity, plus the required variables, their modes and defaults when there are any. With no requirements, `resultKey` is the identity, so every v0.1 key is unchanged.
+
+**Example** (`client.demo`, verified in PostgreSQL):
+
+```
+!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours
+  &where=and(eq(work_country,'US'),eq(year(date),$tax_year))
+  &~intent=[{"role":"user","text":"What are the US hours worked in my client CSV?"},
+            {"role":"manager","text":"Before submitting, the user must state the tax year they are referencing.","require":"$tax_year","if_empty":"ASK"}]
+```
+
+returns `ask` with the manager's text until `$tax_year` is bound; with `$tax_year=2024` it runs and returns 59.25, the same as PostgreSQL.
+
+**Names are data.** A name in an address (registry, path, key, table, column, operator, variable, meta key) is never a JavaScript property: `constructor`, `__proto__`, `toString` and the like behave exactly like any other unknown name (v0.2 fix; the tests compare every position against an ordinary name).
+
