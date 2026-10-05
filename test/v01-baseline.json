@@ -1,0 +1,2574 @@
+[
+ {
+  "id": "students-by-cohort",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'",
+  "sql": {
+   "sql": "SELECT *\nFROM students\nWHERE cohort = $1",
+   "params": [
+    "2026-fall"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     1,
+     "Maya",
+     "Chen",
+     "maya.chen@school.demo",
+     "2026-fall",
+     3.92,
+     "2026-08-12"
+    ],
+    [
+     2,
+     "Diego",
+     "Alvarez",
+     "diego.alvarez@school.demo",
+     "2026-fall",
+     3.78,
+     "2026-08-14"
+    ],
+    [
+     4,
+     "Samuel",
+     "Okafor",
+     "samuel.okafor@school.demo",
+     "2026-fall",
+     3.88,
+     "2026-08-20"
+    ],
+    [
+     6,
+     "Luca",
+     "Rossi",
+     "luca.rossi@school.demo",
+     "2026-fall",
+     3.67,
+     "2026-09-02"
+    ],
+    [
+     8,
+     "Noah",
+     "Kim",
+     "noah.kim@school.demo",
+     "2026-fall",
+     2.95,
+     "2026-08-28"
+    ],
+    [
+     10,
+     "Ethan",
+     "Brooks",
+     "ethan.brooks@school.demo",
+     "2026-fall",
+     3.2,
+     "2026-08-05"
+    ],
+    [
+     12,
+     "Oliver",
+     "Grant",
+     "oliver.grant@school.demo",
+     "2026-fall",
+     3.71,
+     "2026-09-05"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "top-gpa",
+  "input": "!tcxp:/school.demo/sql/select?cols=first_name,last_name,gpa&from=students&where=ge(gpa,$min_gpa)&order=desc(gpa)&limit=$top&$min_gpa=3.5&$top=5",
+  "uri": "!tcxp:/school.demo/sql/select?cols=first_name,last_name,gpa&from=students&where=ge(gpa,$min_gpa)&order=desc(gpa)&limit=$top&$min_gpa=3.5&$top=5",
+  "identity": "!tcxp:/school.demo/sql/select?cols=first_name,last_name,gpa&from=students&where=ge(gpa,$min_gpa)&order=desc(gpa)&limit=$top&$min_gpa=3.5&$top=5",
+  "sql": {
+   "sql": "SELECT first_name, last_name, gpa\nFROM students\nWHERE gpa >= $1\nORDER BY gpa DESC\nLIMIT $2",
+   "params": [
+    3.5,
+    5
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "first_name",
+    "last_name",
+    "gpa"
+   ],
+   "rows": [
+    [
+     "Amara",
+     "Diallo",
+     3.95
+    ],
+    [
+     "Maya",
+     "Chen",
+     3.92
+    ],
+    [
+     "Samuel",
+     "Okafor",
+     3.88
+    ],
+    [
+     "Diego",
+     "Alvarez",
+     3.78
+    ],
+    [
+     "Oliver",
+     "Grant",
+     3.71
+    ]
+   ]
+  }
+ },
+ {
+  "id": "joined-in-window",
+  "input": "!tcxp:/school.demo/sql/select?cols=student_id,email,enrolled_on&from=students&where=between(enrolled_on,$start,$end)&order=asc(enrolled_on)&$start=date'2026-08-01'&$end=date'2026-08-31'",
+  "uri": "!tcxp:/school.demo/sql/select?cols=student_id,email,enrolled_on&from=students&where=between(enrolled_on,$start,$end)&order=asc(enrolled_on)&$start=date'2026-08-01'&$end=date'2026-08-31'",
+  "identity": "!tcxp:/school.demo/sql/select?cols=student_id,email,enrolled_on&from=students&where=between(enrolled_on,$start,$end)&order=asc(enrolled_on)&$start=date'2026-08-01'&$end=date'2026-08-31'",
+  "sql": {
+   "sql": "SELECT student_id, email, enrolled_on\nFROM students\nWHERE enrolled_on BETWEEN $1 AND $2\nORDER BY enrolled_on ASC",
+   "params": [
+    "2026-08-01",
+    "2026-08-31"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "email",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     10,
+     "ethan.brooks@school.demo",
+     "2026-08-05"
+    ],
+    [
+     1,
+     "maya.chen@school.demo",
+     "2026-08-12"
+    ],
+    [
+     2,
+     "diego.alvarez@school.demo",
+     "2026-08-14"
+    ],
+    [
+     4,
+     "samuel.okafor@school.demo",
+     "2026-08-20"
+    ],
+    [
+     8,
+     "noah.kim@school.demo",
+     "2026-08-28"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "ungraded-since",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=submissions&where=and(ge(submitted_at,$since),isnull(score))&$since=date'2026-09-15'",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=submissions&where=and(ge(submitted_at,$since),isnull(score))&$since=date'2026-09-15'",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=submissions&where=and(ge(submitted_at,$since),isnull(score))&$since=date'2026-09-15'",
+  "sql": {
+   "sql": "SELECT *\nFROM submissions\nWHERE submitted_at >= $1 AND score IS NULL",
+   "params": [
+    "2026-09-15"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "submission_id",
+    "assignment_id",
+    "student_id",
+    "submitted_at",
+    "score",
+    "status"
+   ],
+   "rows": [
+    [
+     6,
+     2,
+     1,
+     "2026-09-25 17:00:00+00",
+     null,
+     "on_time"
+    ],
+    [
+     7,
+     2,
+     2,
+     "2026-09-27 09:12:00+00",
+     null,
+     "late"
+    ],
+    [
+     8,
+     2,
+     6,
+     "2026-09-26 22:58:00+00",
+     null,
+     "on_time"
+    ],
+    [
+     15,
+     5,
+     1,
+     "2026-09-29 20:10:00+00",
+     null,
+     "on_time"
+    ],
+    [
+     16,
+     5,
+     10,
+     "2026-09-30 14:00:00+00",
+     null,
+     "late"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "avg-per-assignment",
+  "input": "!tcxp:/school.demo/sql/select?cols=assignment_id,as(round(avg(score),1),avg_score),as(count(*),n)&from=submissions&group=assignment_id&having=ge(count(*),$min_n)&order=desc(avg_score)&$min_n=3",
+  "uri": "!tcxp:/school.demo/sql/select?cols=assignment_id,as(round(avg(score),1),avg_score),as(count(*),n)&from=submissions&group=assignment_id&having=ge(count(*),$min_n)&order=desc(avg_score)&$min_n=3",
+  "identity": "!tcxp:/school.demo/sql/select?cols=assignment_id,as(round(avg(score),1),avg_score),as(count(*),n)&from=submissions&group=assignment_id&having=ge(count(*),$min_n)&order=desc(avg_score)&$min_n=3",
+  "sql": {
+   "sql": "SELECT assignment_id, round(avg(score), 1) AS avg_score, count(*) AS n\nFROM submissions\nGROUP BY assignment_id\nHAVING count(*) >= $1\nORDER BY avg_score DESC",
+   "params": [
+    3
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "assignment_id",
+    "avg_score",
+    "n"
+   ],
+   "rows": [
+    [
+     2,
+     null,
+     3
+    ],
+    [
+     4,
+     86,
+     5
+    ],
+    [
+     1,
+     77.2,
+     6
+    ],
+    [
+     6,
+     17,
+     4
+    ]
+   ]
+  }
+ },
+ {
+  "id": "late-and-low",
+  "input": "!tcxp:/school.demo/sql/select?cols=submission_id,student_id,score,status&from=submissions&where=and(in(status,'late','resubmitted'),lt(score,$threshold))&$threshold=70",
+  "uri": "!tcxp:/school.demo/sql/select?cols=submission_id,student_id,score,status&from=submissions&where=and(in(status,'late','resubmitted'),lt(score,$threshold))&$threshold=70",
+  "identity": "!tcxp:/school.demo/sql/select?cols=submission_id,student_id,score,status&from=submissions&where=and(in(status,'late','resubmitted'),lt(score,$threshold))&$threshold=70",
+  "sql": {
+   "sql": "SELECT submission_id, student_id, score, status\nFROM submissions\nWHERE status IN ('late', 'resubmitted') AND score < $1",
+   "params": [
+    70
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "submission_id",
+    "student_id",
+    "score",
+    "status"
+   ],
+   "rows": [
+    [
+     3,
+     4,
+     64,
+     "late"
+    ],
+    [
+     5,
+     12,
+     58,
+     "late"
+    ],
+    [
+     18,
+     12,
+     12,
+     "late"
+    ],
+    [
+     20,
+     12,
+     66,
+     "resubmitted"
+    ],
+    [
+     21,
+     2,
+     38,
+     "late"
+    ],
+    [
+     22,
+     7,
+     20,
+     "resubmitted"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "roster-inner",
+  "input": "!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'",
+  "uri": "!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'",
+  "identity": "!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'",
+  "sql": {
+   "sql": "SELECT students.first_name, students.last_name, courses.title\nFROM students\nINNER JOIN enrollments ON enrollments.student_id = students.student_id\nINNER JOIN courses ON courses.course_id = enrollments.course_id\nWHERE courses.code = $1",
+   "params": [
+    "CS101"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "first_name",
+    "last_name",
+    "title"
+   ],
+   "rows": [
+    [
+     "Maya",
+     "Chen",
+     "Intro to Programming"
+    ],
+    [
+     "Diego",
+     "Alvarez",
+     "Intro to Programming"
+    ],
+    [
+     "Samuel",
+     "Okafor",
+     "Intro to Programming"
+    ],
+    [
+     "Luca",
+     "Rossi",
+     "Intro to Programming"
+    ],
+    [
+     "Noah",
+     "Kim",
+     "Intro to Programming"
+    ],
+    [
+     "Oliver",
+     "Grant",
+     "Intro to Programming"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "no-submissions-left",
+  "input": "!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)",
+  "uri": "!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)",
+  "identity": "!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)",
+  "sql": {
+   "sql": "SELECT students.student_id, students.email\nFROM students\nLEFT JOIN submissions ON submissions.student_id = students.student_id\nWHERE submissions.submission_id IS NULL",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "email"
+   ],
+   "rows": [
+    [
+     5,
+     "hannah.weiss@school.demo"
+    ],
+    [
+     8,
+     "noah.kim@school.demo"
+    ],
+    [
+     9,
+     "sofia.petrov@school.demo"
+    ],
+    [
+     11,
+     "leila.haddad@school.demo"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "unmatched-full",
+  "input": "!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))",
+  "uri": "!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))",
+  "identity": "!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))",
+  "sql": {
+   "sql": "SELECT courses.code, assignments.title\nFROM courses\nFULL OUTER JOIN assignments ON assignments.course_id = courses.course_id\nWHERE courses.course_id IS NULL OR assignments.assignment_id IS NULL",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "code",
+    "title"
+   ],
+   "rows": [
+    [
+     "HCI150",
+     null
+    ],
+    [
+     null,
+     "Ethics in data"
+    ],
+    [
+     null,
+     "Capstone proposal template"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "dept-enrollment",
+  "input": "!tcxp:/school.demo/sql/select?cols=courses.department,as(count(enrollments.enrollment_id),enrolled)&from=courses&join=left(enrollments,and(eq(enrollments.course_id,courses.course_id),eq(enrollments.status,$status)))&group=courses.department&order=desc(enrolled),asc(courses.department)&$status='active'",
+  "uri": "!tcxp:/school.demo/sql/select?cols=courses.department,as(count(enrollments.enrollment_id),enrolled)&from=courses&join=left(enrollments,and(eq(enrollments.course_id,courses.course_id),eq(enrollments.status,$status)))&group=courses.department&order=desc(enrolled),asc(courses.department)&$status='active'",
+  "identity": "!tcxp:/school.demo/sql/select?cols=courses.department,as(count(enrollments.enrollment_id),enrolled)&from=courses&join=left(enrollments,and(eq(enrollments.course_id,courses.course_id),eq(enrollments.status,$status)))&group=courses.department&order=desc(enrolled),asc(courses.department)&$status='active'",
+  "sql": {
+   "sql": "SELECT courses.department, count(enrollments.enrollment_id) AS enrolled\nFROM courses\nLEFT JOIN enrollments ON enrollments.course_id = courses.course_id AND enrollments.status = $1\nGROUP BY courses.department\nORDER BY enrolled DESC, courses.department ASC",
+   "params": [
+    "active"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "department",
+    "enrolled"
+   ],
+   "rows": [
+    [
+     "CS",
+     7
+    ],
+    [
+     "MATH",
+     4
+    ],
+    [
+     "DS",
+     3
+    ]
+   ]
+  }
+ },
+ {
+  "id": "hello-call",
+  "input": "@!tcxp:/registry/hello?do=world",
+  "uri": "@!tcxp:/registry/hello?do=world",
+  "identity": "@!tcxp:/registry/hello?do=world",
+  "sql": null,
+  "result": {
+   "kind": "call",
+   "value": "hello, world",
+   "returns": "text"
+  }
+ },
+ {
+  "id": "cohort-from-call",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort",
+  "sql": {
+   "sql": "SELECT *\nFROM students\nWHERE cohort = $1",
+   "params": [
+    "2026-fall"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     1,
+     "Maya",
+     "Chen",
+     "maya.chen@school.demo",
+     "2026-fall",
+     3.92,
+     "2026-08-12"
+    ],
+    [
+     2,
+     "Diego",
+     "Alvarez",
+     "diego.alvarez@school.demo",
+     "2026-fall",
+     3.78,
+     "2026-08-14"
+    ],
+    [
+     4,
+     "Samuel",
+     "Okafor",
+     "samuel.okafor@school.demo",
+     "2026-fall",
+     3.88,
+     "2026-08-20"
+    ],
+    [
+     6,
+     "Luca",
+     "Rossi",
+     "luca.rossi@school.demo",
+     "2026-fall",
+     3.67,
+     "2026-09-02"
+    ],
+    [
+     8,
+     "Noah",
+     "Kim",
+     "noah.kim@school.demo",
+     "2026-fall",
+     2.95,
+     "2026-08-28"
+    ],
+    [
+     10,
+     "Ethan",
+     "Brooks",
+     "ethan.brooks@school.demo",
+     "2026-fall",
+     3.2,
+     "2026-08-05"
+    ],
+    [
+     12,
+     "Oliver",
+     "Grant",
+     "oliver.grant@school.demo",
+     "2026-fall",
+     3.71,
+     "2026-09-05"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "equation-gap",
+  "input": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&~intent=Is 2x + 3 = 9 true?&~spikes=[{\"id\":\"s1\",\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}]",
+  "uri": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&~intent=Is 2x + 3 = 9 true?&~spikes=[{\"id\":\"s1\",\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}]",
+  "identity": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)",
+  "sql": {
+   "sql": "SELECT 2 * $1::numeric + 3 = 9 AS result",
+   "params": [
+    null
+   ]
+  },
+  "result": {
+   "kind": "gap",
+   "gaps": [
+    "x"
+   ]
+  }
+ },
+ {
+  "id": "equation-bound",
+  "input": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3&~intent=Is 2x + 3 = 9 true when x = 3?&~spikes=[{\"id\":\"s1\",\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}]",
+  "uri": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3&~intent=Is 2x + 3 = 9 true when x = 3?&~spikes=[{\"id\":\"s1\",\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}]",
+  "identity": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3",
+  "sql": {
+   "sql": "SELECT 2 * $1::numeric + 3 = 9 AS result",
+   "params": [
+    3
+   ]
+  },
+  "result": {
+   "kind": "value",
+   "value": true,
+   "decision": true
+  }
+ },
+ {
+  "id": "ice-gap",
+  "input": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&~intent=The water is 29 °F. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+  "uri": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&~intent=The water is 29 °F. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+  "identity": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29",
+  "sql": {
+   "sql": "SELECT $1::numeric < $2::numeric AS result",
+   "params": [
+    null,
+    null
+   ]
+  },
+  "result": {
+   "kind": "gap",
+   "gaps": [
+    "freezing_point"
+   ]
+  }
+ },
+ {
+  "id": "ice-atlantic",
+  "input": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=28.6&~intent=The water is 29 °F on the Atlantic route. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+  "uri": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=28.6&~intent=The water is 29 °F on the Atlantic route. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+  "identity": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=28.6",
+  "sql": {
+   "sql": "SELECT $1::numeric < $2::numeric AS result",
+   "params": [
+    29,
+    28.6
+   ]
+  },
+  "result": {
+   "kind": "value",
+   "value": false,
+   "decision": false
+  }
+ },
+ {
+  "id": "ice-baltic",
+  "input": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=31.3&~intent=The water is 29 °F on the Baltic route. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+  "uri": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=31.3&~intent=The water is 29 °F on the Baltic route. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+  "identity": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=31.3",
+  "sql": {
+   "sql": "SELECT $1::numeric < $2::numeric AS result",
+   "params": [
+    29,
+    31.3
+   ]
+  },
+  "result": {
+   "kind": "value",
+   "value": true,
+   "decision": true
+  }
+ },
+ {
+  "id": "us-hours-gap",
+  "input": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&~intent=How many hours did our people work in the US?&~spikes=[{\"id\":\"s1\",\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}]",
+  "uri": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&~intent=How many hours did our people work in the US?&~spikes=[{\"id\":\"s1\",\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}]",
+  "identity": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))",
+  "sql": {
+   "sql": "SELECT sum(work_logs.hours) AS us_hours\nFROM work_logs\nWHERE work_logs.work_country = 'US' AND extract(year from work_logs.worked_on) = $1",
+   "params": [
+    null
+   ]
+  },
+  "result": {
+   "kind": "gap",
+   "gaps": [
+    "tax_year"
+   ]
+  }
+ },
+ {
+  "id": "us-hours-2024",
+  "input": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&$tax_year=2024&~intent=How many hours did our people work in the US in tax year 2024?&~spikes=[{\"id\":\"s1\",\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}]",
+  "uri": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&$tax_year=2024&~intent=How many hours did our people work in the US in tax year 2024?&~spikes=[{\"id\":\"s1\",\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}]",
+  "identity": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&$tax_year=2024",
+  "sql": {
+   "sql": "SELECT sum(work_logs.hours) AS us_hours\nFROM work_logs\nWHERE work_logs.work_country = 'US' AND extract(year from work_logs.worked_on) = $1",
+   "params": [
+    2024
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "us_hours"
+   ],
+   "rows": [
+    [
+     59.25
+    ]
+   ]
+  }
+ },
+ {
+  "id": "us-hours-fy-vs-tax",
+  "input": "!tcxp:/firm.demo/sql/select?cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'",
+  "uri": "!tcxp:/firm.demo/sql/select?cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'",
+  "identity": "!tcxp:/firm.demo/sql/select?cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'",
+  "sql": {
+   "sql": "SELECT extract(year from work_logs.worked_on) AS calendar_year, projects.fiscal_year, sum(work_logs.hours) AS us_hours\nFROM work_logs\nINNER JOIN projects ON projects.project_id = work_logs.project_id\nWHERE work_logs.work_country = $1\nGROUP BY extract(year from work_logs.worked_on), projects.fiscal_year\nORDER BY calendar_year ASC, projects.fiscal_year ASC",
+   "params": [
+    "US"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "calendar_year",
+    "fiscal_year",
+    "us_hours"
+   ],
+   "rows": [
+    [
+     2024,
+     2024,
+     26.5
+    ],
+    [
+     2024,
+     2025,
+     32.75
+    ],
+    [
+     2025,
+     2025,
+     26
+    ],
+    [
+     2025,
+     2026,
+     23.5
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:SELECT column list",
+  "input": "!tcxp:/school.demo/sql/select?cols=first_name,gpa&from=students",
+  "uri": "!tcxp:/school.demo/sql/select?cols=first_name,gpa&from=students",
+  "identity": "!tcxp:/school.demo/sql/select?cols=first_name,gpa&from=students",
+  "sql": {
+   "sql": "SELECT first_name, gpa\nFROM students",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "first_name",
+    "gpa"
+   ],
+   "rows": [
+    [
+     "Maya",
+     3.92
+    ],
+    [
+     "Diego",
+     3.78
+    ],
+    [
+     "Priya",
+     3.55
+    ],
+    [
+     "Samuel",
+     3.88
+    ],
+    [
+     "Hannah",
+     3.1
+    ],
+    [
+     "Luca",
+     3.67
+    ],
+    [
+     "Amara",
+     3.95
+    ],
+    [
+     "Noah",
+     2.95
+    ],
+    [
+     "Sofia",
+     3.4
+    ],
+    [
+     "Ethan",
+     3.2
+    ],
+    [
+     "Leila",
+     2.8
+    ],
+    [
+     "Oliver",
+     3.71
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:SELECT *",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students",
+  "sql": {
+   "sql": "SELECT *\nFROM students",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     1,
+     "Maya",
+     "Chen",
+     "maya.chen@school.demo",
+     "2026-fall",
+     3.92,
+     "2026-08-12"
+    ],
+    [
+     2,
+     "Diego",
+     "Alvarez",
+     "diego.alvarez@school.demo",
+     "2026-fall",
+     3.78,
+     "2026-08-14"
+    ],
+    [
+     3,
+     "Priya",
+     "Nair",
+     "priya.nair@school.demo",
+     "2026-spring",
+     3.55,
+     "2026-01-10"
+    ],
+    [
+     4,
+     "Samuel",
+     "Okafor",
+     "samuel.okafor@school.demo",
+     "2026-fall",
+     3.88,
+     "2026-08-20"
+    ],
+    [
+     5,
+     "Hannah",
+     "Weiss",
+     "hannah.weiss@school.demo",
+     "2025-fall",
+     3.1,
+     "2025-08-18"
+    ],
+    [
+     6,
+     "Luca",
+     "Rossi",
+     "luca.rossi@school.demo",
+     "2026-fall",
+     3.67,
+     "2026-09-02"
+    ],
+    [
+     7,
+     "Amara",
+     "Diallo",
+     "amara.diallo@school.demo",
+     "2026-spring",
+     3.95,
+     "2026-01-08"
+    ],
+    [
+     8,
+     "Noah",
+     "Kim",
+     "noah.kim@school.demo",
+     "2026-fall",
+     2.95,
+     "2026-08-28"
+    ],
+    [
+     9,
+     "Sofia",
+     "Petrov",
+     "sofia.petrov@school.demo",
+     "2025-fall",
+     3.4,
+     "2025-08-22"
+    ],
+    [
+     10,
+     "Ethan",
+     "Brooks",
+     "ethan.brooks@school.demo",
+     "2026-fall",
+     3.2,
+     "2026-08-05"
+    ],
+    [
+     11,
+     "Leila",
+     "Haddad",
+     "leila.haddad@school.demo",
+     "2026-spring",
+     2.8,
+     "2026-01-15"
+    ],
+    [
+     12,
+     "Oliver",
+     "Grant",
+     "oliver.grant@school.demo",
+     "2026-fall",
+     3.71,
+     "2026-09-05"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:Column alias (AS)",
+  "input": "!tcxp:/school.demo/sql/select?cols=as(gpa,grade)&from=students",
+  "uri": "!tcxp:/school.demo/sql/select?cols=as(gpa,grade)&from=students",
+  "identity": "!tcxp:/school.demo/sql/select?cols=as(gpa,grade)&from=students",
+  "sql": {
+   "sql": "SELECT gpa AS grade\nFROM students",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "grade"
+   ],
+   "rows": [
+    [
+     3.92
+    ],
+    [
+     3.78
+    ],
+    [
+     3.55
+    ],
+    [
+     3.88
+    ],
+    [
+     3.1
+    ],
+    [
+     3.67
+    ],
+    [
+     3.95
+    ],
+    [
+     2.95
+    ],
+    [
+     3.4
+    ],
+    [
+     3.2
+    ],
+    [
+     2.8
+    ],
+    [
+     3.71
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:FROM table",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=courses",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=courses",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=courses",
+  "sql": {
+   "sql": "SELECT *\nFROM courses",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "course_id",
+    "code",
+    "title",
+    "department",
+    "credits"
+   ],
+   "rows": [
+    [
+     1,
+     "CS101",
+     "Intro to Programming",
+     "CS",
+     4
+    ],
+    [
+     2,
+     "MATH140",
+     "Discrete Mathematics",
+     "MATH",
+     3
+    ],
+    [
+     3,
+     "DS210",
+     "Data Engineering Foundations",
+     "DS",
+     4
+    ],
+    [
+     4,
+     "STAT200",
+     "Applied Statistics",
+     "MATH",
+     3
+    ],
+    [
+     5,
+     "HCI150",
+     "Human-Computer Interaction",
+     "CS",
+     3
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:= <> < <= > >=",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=and(ge(gpa,3),ne(cohort,$c),lt(gpa,4))&$c='2025-fall'",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=and(ge(gpa,3),ne(cohort,$c),lt(gpa,4))&$c='2025-fall'",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=and(ge(gpa,3),ne(cohort,$c),lt(gpa,4))&$c='2025-fall'",
+  "sql": {
+   "sql": "SELECT *\nFROM students\nWHERE gpa >= 3 AND cohort <> $1 AND gpa < 4",
+   "params": [
+    "2025-fall"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     1,
+     "Maya",
+     "Chen",
+     "maya.chen@school.demo",
+     "2026-fall",
+     3.92,
+     "2026-08-12"
+    ],
+    [
+     2,
+     "Diego",
+     "Alvarez",
+     "diego.alvarez@school.demo",
+     "2026-fall",
+     3.78,
+     "2026-08-14"
+    ],
+    [
+     3,
+     "Priya",
+     "Nair",
+     "priya.nair@school.demo",
+     "2026-spring",
+     3.55,
+     "2026-01-10"
+    ],
+    [
+     4,
+     "Samuel",
+     "Okafor",
+     "samuel.okafor@school.demo",
+     "2026-fall",
+     3.88,
+     "2026-08-20"
+    ],
+    [
+     6,
+     "Luca",
+     "Rossi",
+     "luca.rossi@school.demo",
+     "2026-fall",
+     3.67,
+     "2026-09-02"
+    ],
+    [
+     7,
+     "Amara",
+     "Diallo",
+     "amara.diallo@school.demo",
+     "2026-spring",
+     3.95,
+     "2026-01-08"
+    ],
+    [
+     10,
+     "Ethan",
+     "Brooks",
+     "ethan.brooks@school.demo",
+     "2026-fall",
+     3.2,
+     "2026-08-05"
+    ],
+    [
+     12,
+     "Oliver",
+     "Grant",
+     "oliver.grant@school.demo",
+     "2026-fall",
+     3.71,
+     "2026-09-05"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:AND / OR / NOT",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=or(not(eq(cohort,'2026-fall')),gt(gpa,3.9))",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=or(not(eq(cohort,'2026-fall')),gt(gpa,3.9))",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=or(not(eq(cohort,'2026-fall')),gt(gpa,3.9))",
+  "sql": {
+   "sql": "SELECT *\nFROM students\nWHERE NOT cohort = '2026-fall' OR gpa > 3.9",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     1,
+     "Maya",
+     "Chen",
+     "maya.chen@school.demo",
+     "2026-fall",
+     3.92,
+     "2026-08-12"
+    ],
+    [
+     3,
+     "Priya",
+     "Nair",
+     "priya.nair@school.demo",
+     "2026-spring",
+     3.55,
+     "2026-01-10"
+    ],
+    [
+     5,
+     "Hannah",
+     "Weiss",
+     "hannah.weiss@school.demo",
+     "2025-fall",
+     3.1,
+     "2025-08-18"
+    ],
+    [
+     7,
+     "Amara",
+     "Diallo",
+     "amara.diallo@school.demo",
+     "2026-spring",
+     3.95,
+     "2026-01-08"
+    ],
+    [
+     9,
+     "Sofia",
+     "Petrov",
+     "sofia.petrov@school.demo",
+     "2025-fall",
+     3.4,
+     "2025-08-22"
+    ],
+    [
+     11,
+     "Leila",
+     "Haddad",
+     "leila.haddad@school.demo",
+     "2026-spring",
+     2.8,
+     "2026-01-15"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:IN (list)",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=courses&where=in(department,'CS','DS')",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=courses&where=in(department,'CS','DS')",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=courses&where=in(department,'CS','DS')",
+  "sql": {
+   "sql": "SELECT *\nFROM courses\nWHERE department IN ('CS', 'DS')",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "course_id",
+    "code",
+    "title",
+    "department",
+    "credits"
+   ],
+   "rows": [
+    [
+     1,
+     "CS101",
+     "Intro to Programming",
+     "CS",
+     4
+    ],
+    [
+     3,
+     "DS210",
+     "Data Engineering Foundations",
+     "DS",
+     4
+    ],
+    [
+     5,
+     "HCI150",
+     "Human-Computer Interaction",
+     "CS",
+     3
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:BETWEEN",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=between(gpa,3,3.5)",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=between(gpa,3,3.5)",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=between(gpa,3,3.5)",
+  "sql": {
+   "sql": "SELECT *\nFROM students\nWHERE gpa BETWEEN 3 AND 3.5",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     5,
+     "Hannah",
+     "Weiss",
+     "hannah.weiss@school.demo",
+     "2025-fall",
+     3.1,
+     "2025-08-18"
+    ],
+    [
+     9,
+     "Sofia",
+     "Petrov",
+     "sofia.petrov@school.demo",
+     "2025-fall",
+     3.4,
+     "2025-08-22"
+    ],
+    [
+     10,
+     "Ethan",
+     "Brooks",
+     "ethan.brooks@school.demo",
+     "2026-fall",
+     3.2,
+     "2026-08-05"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:LIKE / ILIKE",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=ilike(email,$pat)&$pat='%25chen%25'",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=ilike(email,$pat)&$pat='%25chen%25'",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=ilike(email,$pat)&$pat='%25chen%25'",
+  "sql": {
+   "sql": "SELECT *\nFROM students\nWHERE email ILIKE $1",
+   "params": [
+    "%chen%"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     1,
+     "Maya",
+     "Chen",
+     "maya.chen@school.demo",
+     "2026-fall",
+     3.92,
+     "2026-08-12"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:IS NULL / IS NOT NULL",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=assignments&where=notnull(course_id)",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=assignments&where=notnull(course_id)",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=assignments&where=notnull(course_id)",
+  "sql": {
+   "sql": "SELECT *\nFROM assignments\nWHERE course_id IS NOT NULL",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "assignment_id",
+    "course_id",
+    "title",
+    "max_points",
+    "due_on"
+   ],
+   "rows": [
+    [
+     1,
+     1,
+     "Variables and types",
+     100,
+     "2026-09-12"
+    ],
+    [
+     2,
+     1,
+     "Control flow",
+     100,
+     "2026-09-26"
+    ],
+    [
+     3,
+     2,
+     "Proof techniques",
+     50,
+     "2026-09-19"
+    ],
+    [
+     4,
+     3,
+     "Schema design",
+     100,
+     "2026-09-15"
+    ],
+    [
+     5,
+     3,
+     "SQL joins lab",
+     100,
+     "2026-09-29"
+    ],
+    [
+     6,
+     4,
+     "Sampling quiz",
+     20,
+     "2026-09-18"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:Arithmetic + - * /",
+  "input": "!tcxp:/school.demo/sql/select?cols=title,as(div(max_points,10),tenth)&from=assignments",
+  "uri": "!tcxp:/school.demo/sql/select?cols=title,as(div(max_points,10),tenth)&from=assignments",
+  "identity": "!tcxp:/school.demo/sql/select?cols=title,as(div(max_points,10),tenth)&from=assignments",
+  "sql": {
+   "sql": "SELECT title, max_points / 10 AS tenth\nFROM assignments",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "title",
+    "tenth"
+   ],
+   "rows": [
+    [
+     "Variables and types",
+     10
+    ],
+    [
+     "Control flow",
+     10
+    ],
+    [
+     "Proof techniques",
+     5
+    ],
+    [
+     "Schema design",
+     10
+    ],
+    [
+     "SQL joins lab",
+     10
+    ],
+    [
+     "Sampling quiz",
+     2
+    ],
+    [
+     "Ethics in data",
+     5
+    ],
+    [
+     "Capstone proposal template",
+     10
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:Scalar functions (round, lower, upper, coalesce)",
+  "input": "!tcxp:/school.demo/sql/select?cols=upper(code),coalesce(due_on,date'2026-12-31')&from=courses&join=left(assignments,eq(assignments.course_id,courses.course_id))",
+  "uri": "!tcxp:/school.demo/sql/select?cols=upper(code),coalesce(due_on,date'2026-12-31')&from=courses&join=left(assignments,eq(assignments.course_id,courses.course_id))",
+  "identity": "!tcxp:/school.demo/sql/select?cols=upper(code),coalesce(due_on,date'2026-12-31')&from=courses&join=left(assignments,eq(assignments.course_id,courses.course_id))",
+  "sql": {
+   "sql": "SELECT upper(code), coalesce(due_on, DATE '2026-12-31')\nFROM courses\nLEFT JOIN assignments ON assignments.course_id = courses.course_id",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "upper",
+    "coalesce"
+   ],
+   "rows": [
+    [
+     "CS101",
+     "2026-09-12"
+    ],
+    [
+     "CS101",
+     "2026-09-26"
+    ],
+    [
+     "MATH140",
+     "2026-09-19"
+    ],
+    [
+     "DS210",
+     "2026-09-15"
+    ],
+    [
+     "DS210",
+     "2026-09-29"
+    ],
+    [
+     "STAT200",
+     "2026-09-18"
+    ],
+    [
+     "HCI150",
+     "2026-12-31"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:extract(year from …)",
+  "input": "!tcxp:/firm.demo/sql/select?cols=year(worked_on),count(*)&from=work_logs&group=year(worked_on)",
+  "uri": "!tcxp:/firm.demo/sql/select?cols=year(worked_on),count(*)&from=work_logs&group=year(worked_on)",
+  "identity": "!tcxp:/firm.demo/sql/select?cols=year(worked_on),count(*)&from=work_logs&group=year(worked_on)",
+  "sql": {
+   "sql": "SELECT extract(year from worked_on), count(*)\nFROM work_logs\nGROUP BY extract(year from worked_on)",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "extract",
+    "count"
+   ],
+   "rows": [
+    [
+     2024,
+     12
+    ],
+    [
+     2025,
+     10
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:count / sum / avg / min / max",
+  "input": "!tcxp:/school.demo/sql/select?cols=count(*),avg(gpa),min(gpa),max(gpa),sum(gpa)&from=students",
+  "uri": "!tcxp:/school.demo/sql/select?cols=count(*),avg(gpa),min(gpa),max(gpa),sum(gpa)&from=students",
+  "identity": "!tcxp:/school.demo/sql/select?cols=count(*),avg(gpa),min(gpa),max(gpa),sum(gpa)&from=students",
+  "sql": {
+   "sql": "SELECT count(*), avg(gpa), min(gpa), max(gpa), sum(gpa)\nFROM students",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "count",
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "rows": [
+    [
+     12,
+     3.4924999999999997,
+     2.8,
+     3.95,
+     41.91
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:GROUP BY",
+  "input": "!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort",
+  "uri": "!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort",
+  "identity": "!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort",
+  "sql": {
+   "sql": "SELECT cohort, count(*)\nFROM students\nGROUP BY cohort",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "cohort",
+    "count"
+   ],
+   "rows": [
+    [
+     "2026-fall",
+     7
+    ],
+    [
+     "2026-spring",
+     3
+    ],
+    [
+     "2025-fall",
+     2
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:HAVING",
+  "input": "!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort&having=gt(count(*),2)",
+  "uri": "!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort&having=gt(count(*),2)",
+  "identity": "!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort&having=gt(count(*),2)",
+  "sql": {
+   "sql": "SELECT cohort, count(*)\nFROM students\nGROUP BY cohort\nHAVING count(*) > 2",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "cohort",
+    "count"
+   ],
+   "rows": [
+    [
+     "2026-fall",
+     7
+    ],
+    [
+     "2026-spring",
+     3
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:ORDER BY ASC / DESC",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students&order=desc(gpa),asc(last_name)",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&order=desc(gpa),asc(last_name)",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students&order=desc(gpa),asc(last_name)",
+  "sql": {
+   "sql": "SELECT *\nFROM students\nORDER BY gpa DESC, last_name ASC",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     7,
+     "Amara",
+     "Diallo",
+     "amara.diallo@school.demo",
+     "2026-spring",
+     3.95,
+     "2026-01-08"
+    ],
+    [
+     1,
+     "Maya",
+     "Chen",
+     "maya.chen@school.demo",
+     "2026-fall",
+     3.92,
+     "2026-08-12"
+    ],
+    [
+     4,
+     "Samuel",
+     "Okafor",
+     "samuel.okafor@school.demo",
+     "2026-fall",
+     3.88,
+     "2026-08-20"
+    ],
+    [
+     2,
+     "Diego",
+     "Alvarez",
+     "diego.alvarez@school.demo",
+     "2026-fall",
+     3.78,
+     "2026-08-14"
+    ],
+    [
+     12,
+     "Oliver",
+     "Grant",
+     "oliver.grant@school.demo",
+     "2026-fall",
+     3.71,
+     "2026-09-05"
+    ],
+    [
+     6,
+     "Luca",
+     "Rossi",
+     "luca.rossi@school.demo",
+     "2026-fall",
+     3.67,
+     "2026-09-02"
+    ],
+    [
+     3,
+     "Priya",
+     "Nair",
+     "priya.nair@school.demo",
+     "2026-spring",
+     3.55,
+     "2026-01-10"
+    ],
+    [
+     9,
+     "Sofia",
+     "Petrov",
+     "sofia.petrov@school.demo",
+     "2025-fall",
+     3.4,
+     "2025-08-22"
+    ],
+    [
+     10,
+     "Ethan",
+     "Brooks",
+     "ethan.brooks@school.demo",
+     "2026-fall",
+     3.2,
+     "2026-08-05"
+    ],
+    [
+     5,
+     "Hannah",
+     "Weiss",
+     "hannah.weiss@school.demo",
+     "2025-fall",
+     3.1,
+     "2025-08-18"
+    ],
+    [
+     8,
+     "Noah",
+     "Kim",
+     "noah.kim@school.demo",
+     "2026-fall",
+     2.95,
+     "2026-08-28"
+    ],
+    [
+     11,
+     "Leila",
+     "Haddad",
+     "leila.haddad@school.demo",
+     "2026-spring",
+     2.8,
+     "2026-01-15"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:LIMIT / OFFSET",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students&order=asc(student_id)&limit=$n&offset=2&$n=3",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&order=asc(student_id)&limit=$n&offset=2&$n=3",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students&order=asc(student_id)&limit=$n&offset=2&$n=3",
+  "sql": {
+   "sql": "SELECT *\nFROM students\nORDER BY student_id ASC\nLIMIT $1\nOFFSET 2",
+   "params": [
+    3
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     3,
+     "Priya",
+     "Nair",
+     "priya.nair@school.demo",
+     "2026-spring",
+     3.55,
+     "2026-01-10"
+    ],
+    [
+     4,
+     "Samuel",
+     "Okafor",
+     "samuel.okafor@school.demo",
+     "2026-fall",
+     3.88,
+     "2026-08-20"
+    ],
+    [
+     5,
+     "Hannah",
+     "Weiss",
+     "hannah.weiss@school.demo",
+     "2025-fall",
+     3.1,
+     "2025-08-18"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:INNER JOIN",
+  "input": "!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'",
+  "uri": "!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'",
+  "identity": "!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'",
+  "sql": {
+   "sql": "SELECT students.first_name, students.last_name, courses.title\nFROM students\nINNER JOIN enrollments ON enrollments.student_id = students.student_id\nINNER JOIN courses ON courses.course_id = enrollments.course_id\nWHERE courses.code = $1",
+   "params": [
+    "CS101"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "first_name",
+    "last_name",
+    "title"
+   ],
+   "rows": [
+    [
+     "Maya",
+     "Chen",
+     "Intro to Programming"
+    ],
+    [
+     "Diego",
+     "Alvarez",
+     "Intro to Programming"
+    ],
+    [
+     "Samuel",
+     "Okafor",
+     "Intro to Programming"
+    ],
+    [
+     "Luca",
+     "Rossi",
+     "Intro to Programming"
+    ],
+    [
+     "Noah",
+     "Kim",
+     "Intro to Programming"
+    ],
+    [
+     "Oliver",
+     "Grant",
+     "Intro to Programming"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:LEFT JOIN",
+  "input": "!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)",
+  "uri": "!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)",
+  "identity": "!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)",
+  "sql": {
+   "sql": "SELECT students.student_id, students.email\nFROM students\nLEFT JOIN submissions ON submissions.student_id = students.student_id\nWHERE submissions.submission_id IS NULL",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "email"
+   ],
+   "rows": [
+    [
+     5,
+     "hannah.weiss@school.demo"
+    ],
+    [
+     8,
+     "noah.kim@school.demo"
+    ],
+    [
+     9,
+     "sofia.petrov@school.demo"
+    ],
+    [
+     11,
+     "leila.haddad@school.demo"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:RIGHT JOIN",
+  "input": "!tcxp:/school.demo/sql/select?cols=courses.code,enrollments.status&from=enrollments&join=right(courses,eq(courses.course_id,enrollments.course_id))",
+  "uri": "!tcxp:/school.demo/sql/select?cols=courses.code,enrollments.status&from=enrollments&join=right(courses,eq(courses.course_id,enrollments.course_id))",
+  "identity": "!tcxp:/school.demo/sql/select?cols=courses.code,enrollments.status&from=enrollments&join=right(courses,eq(courses.course_id,enrollments.course_id))",
+  "sql": {
+   "sql": "SELECT courses.code, enrollments.status\nFROM enrollments\nRIGHT JOIN courses ON courses.course_id = enrollments.course_id",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "code",
+    "status"
+   ],
+   "rows": [
+    [
+     "CS101",
+     "active"
+    ],
+    [
+     "CS101",
+     "active"
+    ],
+    [
+     "CS101",
+     "active"
+    ],
+    [
+     "CS101",
+     "active"
+    ],
+    [
+     "CS101",
+     "active"
+    ],
+    [
+     "CS101",
+     "active"
+    ],
+    [
+     "MATH140",
+     "dropped"
+    ],
+    [
+     "MATH140",
+     "completed"
+    ],
+    [
+     "MATH140",
+     "active"
+    ],
+    [
+     "DS210",
+     "active"
+    ],
+    [
+     "DS210",
+     "completed"
+    ],
+    [
+     "DS210",
+     "active"
+    ],
+    [
+     "DS210",
+     "completed"
+    ],
+    [
+     "DS210",
+     "active"
+    ],
+    [
+     "STAT200",
+     "active"
+    ],
+    [
+     "STAT200",
+     "active"
+    ],
+    [
+     "STAT200",
+     "completed"
+    ],
+    [
+     "STAT200",
+     "active"
+    ],
+    [
+     "HCI150",
+     "active"
+    ],
+    [
+     "HCI150",
+     "dropped"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:FULL OUTER JOIN",
+  "input": "!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))",
+  "uri": "!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))",
+  "identity": "!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))",
+  "sql": {
+   "sql": "SELECT courses.code, assignments.title\nFROM courses\nFULL OUTER JOIN assignments ON assignments.course_id = courses.course_id\nWHERE courses.course_id IS NULL OR assignments.assignment_id IS NULL",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "code",
+    "title"
+   ],
+   "rows": [
+    [
+     "HCI150",
+     null
+    ],
+    [
+     null,
+     "Ethics in data"
+    ],
+    [
+     null,
+     "Capstone proposal template"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:CROSS JOIN",
+  "input": "!tcxp:/school.demo/sql/select?cols=courses.code,students.cohort&from=courses&join=cross(students)",
+  "uri": "!tcxp:/school.demo/sql/select?cols=courses.code,students.cohort&from=courses&join=cross(students)",
+  "identity": "!tcxp:/school.demo/sql/select?cols=courses.code,students.cohort&from=courses&join=cross(students)",
+  "sql": {
+   "sql": "SELECT courses.code, students.cohort\nFROM courses\nCROSS JOIN students",
+   "params": []
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "code",
+    "cohort"
+   ],
+   "rows": [
+    [
+     "CS101",
+     "2026-fall"
+    ],
+    [
+     "CS101",
+     "2026-fall"
+    ],
+    [
+     "CS101",
+     "2026-spring"
+    ],
+    [
+     "CS101",
+     "2026-fall"
+    ],
+    [
+     "CS101",
+     "2025-fall"
+    ],
+    [
+     "CS101",
+     "2026-fall"
+    ],
+    [
+     "CS101",
+     "2026-spring"
+    ],
+    [
+     "CS101",
+     "2026-fall"
+    ],
+    [
+     "CS101",
+     "2025-fall"
+    ],
+    [
+     "CS101",
+     "2026-fall"
+    ],
+    [
+     "CS101",
+     "2026-spring"
+    ],
+    [
+     "CS101",
+     "2026-fall"
+    ],
+    [
+     "MATH140",
+     "2026-fall"
+    ],
+    [
+     "MATH140",
+     "2026-fall"
+    ],
+    [
+     "MATH140",
+     "2026-spring"
+    ],
+    [
+     "MATH140",
+     "2026-fall"
+    ],
+    [
+     "MATH140",
+     "2025-fall"
+    ],
+    [
+     "MATH140",
+     "2026-fall"
+    ],
+    [
+     "MATH140",
+     "2026-spring"
+    ],
+    [
+     "MATH140",
+     "2026-fall"
+    ],
+    [
+     "MATH140",
+     "2025-fall"
+    ],
+    [
+     "MATH140",
+     "2026-fall"
+    ],
+    [
+     "MATH140",
+     "2026-spring"
+    ],
+    [
+     "MATH140",
+     "2026-fall"
+    ],
+    [
+     "DS210",
+     "2026-fall"
+    ],
+    [
+     "DS210",
+     "2026-fall"
+    ],
+    [
+     "DS210",
+     "2026-spring"
+    ],
+    [
+     "DS210",
+     "2026-fall"
+    ],
+    [
+     "DS210",
+     "2025-fall"
+    ],
+    [
+     "DS210",
+     "2026-fall"
+    ],
+    [
+     "DS210",
+     "2026-spring"
+    ],
+    [
+     "DS210",
+     "2026-fall"
+    ],
+    [
+     "DS210",
+     "2025-fall"
+    ],
+    [
+     "DS210",
+     "2026-fall"
+    ],
+    [
+     "DS210",
+     "2026-spring"
+    ],
+    [
+     "DS210",
+     "2026-fall"
+    ],
+    [
+     "STAT200",
+     "2026-fall"
+    ],
+    [
+     "STAT200",
+     "2026-fall"
+    ],
+    [
+     "STAT200",
+     "2026-spring"
+    ],
+    [
+     "STAT200",
+     "2026-fall"
+    ],
+    [
+     "STAT200",
+     "2025-fall"
+    ],
+    [
+     "STAT200",
+     "2026-fall"
+    ],
+    [
+     "STAT200",
+     "2026-spring"
+    ],
+    [
+     "STAT200",
+     "2026-fall"
+    ],
+    [
+     "STAT200",
+     "2025-fall"
+    ],
+    [
+     "STAT200",
+     "2026-fall"
+    ],
+    [
+     "STAT200",
+     "2026-spring"
+    ],
+    [
+     "STAT200",
+     "2026-fall"
+    ],
+    [
+     "HCI150",
+     "2026-fall"
+    ],
+    [
+     "HCI150",
+     "2026-fall"
+    ],
+    [
+     "HCI150",
+     "2026-spring"
+    ],
+    [
+     "HCI150",
+     "2026-fall"
+    ],
+    [
+     "HCI150",
+     "2025-fall"
+    ],
+    [
+     "HCI150",
+     "2026-fall"
+    ],
+    [
+     "HCI150",
+     "2026-spring"
+    ],
+    [
+     "HCI150",
+     "2026-fall"
+    ],
+    [
+     "HCI150",
+     "2025-fall"
+    ],
+    [
+     "HCI150",
+     "2026-fall"
+    ],
+    [
+     "HCI150",
+     "2026-spring"
+    ],
+    [
+     "HCI150",
+     "2026-fall"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:Typed variable bound by $key=value",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'",
+  "sql": {
+   "sql": "SELECT *\nFROM students\nWHERE cohort = $1",
+   "params": [
+    "2026-fall"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     1,
+     "Maya",
+     "Chen",
+     "maya.chen@school.demo",
+     "2026-fall",
+     3.92,
+     "2026-08-12"
+    ],
+    [
+     2,
+     "Diego",
+     "Alvarez",
+     "diego.alvarez@school.demo",
+     "2026-fall",
+     3.78,
+     "2026-08-14"
+    ],
+    [
+     4,
+     "Samuel",
+     "Okafor",
+     "samuel.okafor@school.demo",
+     "2026-fall",
+     3.88,
+     "2026-08-20"
+    ],
+    [
+     6,
+     "Luca",
+     "Rossi",
+     "luca.rossi@school.demo",
+     "2026-fall",
+     3.67,
+     "2026-09-02"
+    ],
+    [
+     8,
+     "Noah",
+     "Kim",
+     "noah.kim@school.demo",
+     "2026-fall",
+     2.95,
+     "2026-08-28"
+    ],
+    [
+     10,
+     "Ethan",
+     "Brooks",
+     "ethan.brooks@school.demo",
+     "2026-fall",
+     3.2,
+     "2026-08-05"
+    ],
+    [
+     12,
+     "Oliver",
+     "Grant",
+     "oliver.grant@school.demo",
+     "2026-fall",
+     3.71,
+     "2026-09-05"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:Variable bound by an @ call",
+  "input": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort",
+  "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort",
+  "identity": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort",
+  "sql": {
+   "sql": "SELECT *\nFROM students\nWHERE cohort = $1",
+   "params": [
+    "2026-fall"
+   ]
+  },
+  "result": {
+   "kind": "rows",
+   "columns": [
+    "student_id",
+    "first_name",
+    "last_name",
+    "email",
+    "cohort",
+    "gpa",
+    "enrolled_on"
+   ],
+   "rows": [
+    [
+     1,
+     "Maya",
+     "Chen",
+     "maya.chen@school.demo",
+     "2026-fall",
+     3.92,
+     "2026-08-12"
+    ],
+    [
+     2,
+     "Diego",
+     "Alvarez",
+     "diego.alvarez@school.demo",
+     "2026-fall",
+     3.78,
+     "2026-08-14"
+    ],
+    [
+     4,
+     "Samuel",
+     "Okafor",
+     "samuel.okafor@school.demo",
+     "2026-fall",
+     3.88,
+     "2026-08-20"
+    ],
+    [
+     6,
+     "Luca",
+     "Rossi",
+     "luca.rossi@school.demo",
+     "2026-fall",
+     3.67,
+     "2026-09-02"
+    ],
+    [
+     8,
+     "Noah",
+     "Kim",
+     "noah.kim@school.demo",
+     "2026-fall",
+     2.95,
+     "2026-08-28"
+    ],
+    [
+     10,
+     "Ethan",
+     "Brooks",
+     "ethan.brooks@school.demo",
+     "2026-fall",
+     3.2,
+     "2026-08-05"
+    ],
+    [
+     12,
+     "Oliver",
+     "Grant",
+     "oliver.grant@school.demo",
+     "2026-fall",
+     3.71,
+     "2026-09-05"
+    ]
+   ]
+  }
+ },
+ {
+  "id": "probe:Unbound variable blocks execution",
+  "input": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&~intent=How many hours did our people work in the US?&~spikes=[{\"id\":\"s1\",\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}]",
+  "uri": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&~intent=How many hours did our people work in the US?&~spikes=[{\"id\":\"s1\",\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}]",
+  "identity": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))",
+  "sql": {
+   "sql": "SELECT sum(work_logs.hours) AS us_hours\nFROM work_logs\nWHERE work_logs.work_country = 'US' AND extract(year from work_logs.worked_on) = $1",
+   "params": [
+    null
+   ]
+  },
+  "result": {
+   "kind": "gap",
+   "gaps": [
+    "tax_year"
+   ]
+  }
+ },
+ {
+  "id": "probe:Arithmetic and comparison in math/eval",
+  "input": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3&~intent=Is 2x + 3 = 9 true when x = 3?&~spikes=[{\"id\":\"s1\",\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}]",
+  "uri": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3&~intent=Is 2x + 3 = 9 true when x = 3?&~spikes=[{\"id\":\"s1\",\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}]",
+  "identity": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3",
+  "sql": {
+   "sql": "SELECT 2 * $1::numeric + 3 = 9 AS result",
+   "params": [
+    3
+   ]
+  },
+  "result": {
+   "kind": "value",
+   "value": true,
+   "decision": true
+  }
+ },
+ {
+  "id": "probe:@ call to a registry function",
+  "input": "@!tcxp:/registry/hello?do=world",
+  "uri": "@!tcxp:/registry/hello?do=world",
+  "identity": "@!tcxp:/registry/hello?do=world",
+  "sql": null,
+  "result": {
+   "kind": "call",
+   "value": "hello, world",
+   "returns": "text"
+  }
+ },
+ {
+  "id": "probe:~spikes pointing at nodes, facets lit or dark",
+  "input": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&~intent=The water is 29 °F. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+  "uri": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&~intent=The water is 29 °F. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+  "identity": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29",
+  "sql": {
+   "sql": "SELECT $1::numeric < $2::numeric AS result",
+   "params": [
+    null,
+    null
+   ]
+  },
+  "result": {
+   "kind": "gap",
+   "gaps": [
+    "freezing_point"
+   ]
+  }
+ }
+]
