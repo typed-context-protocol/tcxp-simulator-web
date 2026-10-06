@@ -102,8 +102,10 @@ for (const uri of corpus) {
     try {
       const t = T.parseURI(uri);
       const r = (() => { try { return T.execute(t, {store: T.newStore()}); } catch (e) { return {kind: e instanceof T.TcxpError ? 'tcxp-error' : 'JS-ERROR', msg: e.message}; } })();
-      T.toSQL(t); T.toJSON(t); T.query(t, 'variables'); T.fromJSON(JSON.parse(JSON.stringify(T.toJSON(t))));
-      return norm(JSON.stringify({diag: t.diagnostics.filter(d => d.level !== 'info').map(d => d.level + ':' + d.msg), kind: r.kind, msg: r.msg, gaps: r.gaps, rows: r.rows ? r.rows.length : undefined, value: r.value}));
+      T.toJSON(t); T.query(t, 'variables'); T.fromJSON(JSON.parse(JSON.stringify(T.toJSON(t))));
+      // toSQL too, parameterized and inline: an unbound $constructor must render as a parameter, never as a prototype member
+      const sql = (() => { try { return [T.toSQL(t), T.toSQL(t, {inline: true})]; } catch (e) { return (e instanceof T.TcxpError ? 'tcxp-error: ' : 'JS-ERROR: ') + e.message; } })();
+      return norm(JSON.stringify({diag: t.diagnostics.filter(d => d.level !== 'info').map(d => d.level + ':' + d.msg), kind: r.kind, msg: r.msg, gaps: r.gaps, rows: r.rows ? r.rows.length : undefined, value: r.value, sql}));
     } catch (e) { return norm((e instanceof T.TcxpError ? 'tcxp-error: ' : 'JS-ERROR: ') + e.message); }
   };
   for (const n of NAMES) for (const [where, uri] of nameCases(n)) {
