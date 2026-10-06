@@ -62,6 +62,20 @@ tally('a resolvable address keeps data keys as written, with no meaning', (() =>
   return t.parsed.items.x[0].value === '1' && t.parsed.items['any key'][0].value === 'a=b' && r.registered && r.address === R && t.gaps.length === 0;
 })());
 
+// R20: data keys on tcxp:// keep the order they were written in, integer-like names included, in serialize,
+// toJSON and query (JavaScript objects would list integer-like keys first).
+tally('data keys keep their written order, integer-like keys included (R20)', (() => {
+  const uri = F('tcxp://firm.demo/rules/tax-year?b=1&2=x&a=y&10=z&0=w');
+  const t = T.parseURI(uri), order = ['b', '2', 'a', '10', '0'];
+  const ser = T.serialize(t).uri.split('?')[1].split('&').slice(0, 5).map(p => p.split('=')[0]);
+  const json = T.toJSON(t).data.map(([k]) => k);
+  const q = T.query(t, 'variables').length === 0 && T.query(uri, 'pointer:/2/0').length === 1;
+  const ptrs = JSON.stringify(T.query(t, 'pointer:/b/0').concat(T.query(t, 'pointer:/0/0')).map(h => h.label)) === JSON.stringify(["'1'", "'w'"]);
+  return JSON.stringify(ser) === JSON.stringify(order) && JSON.stringify(json) === JSON.stringify(order) && q && ptrs &&
+    T.serialize(t).uri === uri && T.FilterGenerator.filter(uri).ok &&
+    T.serialize(T.fromJSON(JSON.parse(JSON.stringify(T.toJSON(t))))).uri === uri;
+})(), F('tcxp://firm.demo/rules/tax-year?b=1&2=x&a=y&10=z&0=w') + ' -> ' + (() => { try { return T.serialize(T.parseURI(F('tcxp://firm.demo/rules/tax-year?b=1&2=x&a=y&10=z&0=w'))).uri; } catch (e) { return e.message; } })());
+
 // 3. tcxp://x and !tcxp:/x are different states, both on one registry.
 for (const path of ['firm.demo/rules/tax-year', 'fleet.demo/env/sea-route']) {
   const r = T.parseURI(F('tcxp://' + path)), v = T.parseURI(F('!tcxp:/' + path));
