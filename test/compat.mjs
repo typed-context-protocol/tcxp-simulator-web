@@ -2,7 +2,8 @@
 //
 // The frozen v0.1 baseline (test/v01-baseline.json) is never edited. Each v0.1 address is converted by migrate():
 // its separate ~ keys become one ~context object (intent; observe <- observe, outcome, spikes, review; trace <- pulse,
-// source), rows unchanged; a plain-string intent becomes the handlers' row {"role":"user","text":…}. Then:
+// source), rows unchanged except: a plain-string intent becomes the handlers' row {"role":"user","text":…}, and a
+// spike row drops its "id" (spikes are referred to by position, RULES.md R50). Then:
 //   - the migrated address must parse and re-serialize to exactly itself,
 //   - identity and SQL fiber must equal the v0.1 baseline byte for byte,
 //   - the result must equal the baseline, except the documented kind rename "gap" -> "halt" (counted).
@@ -35,6 +36,7 @@ function migrate(uri) {
     const t = raw.trim();
     let v = t[0] === '[' || t[0] === '{' ? JSON.parse(t) : /^-?\d+$/.test(t) ? Number(t) : raw;
     if (name === 'intent' && typeof v === 'string') v = [{role: 'user', text: v}];
+    if (name === 'spikes') v = (Array.isArray(v) ? v : [v]).map(({id, ...rest}) => rest);   // spike rows carry no id (R50)
     (Array.isArray(v) ? v : [v]).forEach(row => context[to].push(row));
   }
   return head + '?' + kept.concat(['~context=' + enc(JSON.stringify(context))]).join('&');
