@@ -83,20 +83,21 @@ const REGISTRIES = {
 };
 
 /* ---------------------------------------------------------------- queries */
-const Q = (id, group, title, intent, uri, ref) => ({id, group, title, intent, uri, ref: ref || null});
+// Every collection address is a full address: it ends with ~context (empty unless the entry gives one).
+const Q = (id, group, title, intent, uri, ref) => ({id, group, title, intent, uri: uri.includes('~context=') ? uri : uri + (uri.includes('?') ? '&' : '?') + ctx({}), ref: ref || null});
 const S = '!tcxp:/school.demo/sql/select?';
 const F = '!tcxp:/firm.demo/sql/select?';
 const W = '!tcxp:/school.demo/sql/';
 const WF = '!tcxp:/firm.demo/sql/';
 const C = '!tcxp:/client.demo/sql/select?';
 const CSV_TAX = "cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))";
-const CSV_ALL = "cols=as(sum(hours),us_hours)&from=client_hours&where=eq(work_country,'US')";
 const USER_ROW = {role: 'user', text: 'What are the US hours worked in my client CSV?'};
 const MANAGER_ROW = {role: 'manager', text: 'Before submitting, the user must state the tax year they are referencing.', require: '$tax_year', if_empty: 'HALT'};
-const intentRows = rows => '~intent=' + enc(JSON.stringify(rows));
 const enc = s => s.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23');
-const spikes = rows => '~spikes=' + enc(JSON.stringify(rows));
-const intent = t => '~intent=' + enc(t);
+// ~context: the five arrays in their fixed order, written compactly.
+const ctx = p => '~context=' + enc(JSON.stringify({intent: p.intent || [], observe: p.observe || [], reason: [], decide: [], trace: p.trace || []}));
+// The handlers' convention for a plain question: one intent row {role:"user", text}.
+const userRow = text => ({role: 'user', text});
 
 const MUL_SPIKE = [{id: 's1', on: ['/expr/0/0/0'], meaning: '!tcxp:/registry/notes/implicit-mul', structure: '!tcxp:/registry/rules/implicit-mul', environment: null}];
 const EQ = 'expr=eq(add(mul(2,$x),3),9)';
@@ -145,19 +146,19 @@ const QUERIES = [
     S + 'cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort',
     "SELECT * FROM students WHERE cohort = '2026-fall'"),
   Q('equation-gap','math','2x + 3 = 9 with x unknown','Is 2x + 3 = 9 true?',
-    '!tcxp:/registry/math/eval?' + EQ + '&' + intent('Is 2x + 3 = 9 true?') + '&' + spikes(MUL_SPIKE)),
+    '!tcxp:/registry/math/eval?' + EQ + '&' + ctx({intent: [userRow('Is 2x + 3 = 9 true?')], observe: MUL_SPIKE})),
   Q('equation-bound','math','2x + 3 = 9 with x = 3','Is 2x + 3 = 9 true when x = 3?',
-    '!tcxp:/registry/math/eval?' + EQ + '&$x=3&' + intent('Is 2x + 3 = 9 true when x = 3?') + '&' + spikes(MUL_SPIKE)),
+    '!tcxp:/registry/math/eval?' + EQ + '&$x=3&' + ctx({intent: [userRow('Is 2x + 3 = 9 true when x = 3?')], observe: MUL_SPIKE})),
   Q('ice-gap','math','Ice risk, sea unknown','The water is 29 °F. Will the sea ice up?',
-    '!tcxp:/fleet.demo/math/eval?' + SEA + '&$water_temp=29&' + intent('The water is 29 °F. Will the sea ice up?') + '&' + spikes(SEA_SPIKES)),
+    '!tcxp:/fleet.demo/math/eval?' + SEA + '&$water_temp=29&' + ctx({intent: [userRow('The water is 29 °F. Will the sea ice up?')], observe: SEA_SPIKES})),
   Q('ice-atlantic','math','Ice risk on the Atlantic route','The water is 29 °F on the Atlantic route. Will the sea ice up?',
-    '!tcxp:/fleet.demo/math/eval?' + SEA + '&$water_temp=29&$freezing_point=28.6&' + intent('The water is 29 °F on the Atlantic route. Will the sea ice up?') + '&' + spikes(SEA_SPIKES)),
+    '!tcxp:/fleet.demo/math/eval?' + SEA + '&$water_temp=29&$freezing_point=28.6&' + ctx({intent: [userRow('The water is 29 °F on the Atlantic route. Will the sea ice up?')], observe: SEA_SPIKES})),
   Q('ice-baltic','math','Ice risk on the Baltic route','The water is 29 °F on the Baltic route. Will the sea ice up?',
-    '!tcxp:/fleet.demo/math/eval?' + SEA + '&$water_temp=29&$freezing_point=31.3&' + intent('The water is 29 °F on the Baltic route. Will the sea ice up?') + '&' + spikes(SEA_SPIKES)),
+    '!tcxp:/fleet.demo/math/eval?' + SEA + '&$water_temp=29&$freezing_point=31.3&' + ctx({intent: [userRow('The water is 29 °F on the Baltic route. Will the sea ice up?')], observe: SEA_SPIKES})),
   Q('us-hours-gap','tax','US hours, tax year missing','How many hours did our people work in the US?',
-    F + TAX + '&' + intent('How many hours did our people work in the US?') + '&' + spikes(TAX_SPIKES)),
+    F + TAX + '&' + ctx({intent: [userRow('How many hours did our people work in the US?')], observe: TAX_SPIKES})),
   Q('us-hours-2024','tax','US hours for tax year 2024','How many hours did our people work in the US in tax year 2024?',
-    F + TAX + '&$tax_year=2024&' + intent('How many hours did our people work in the US in tax year 2024?') + '&' + spikes(TAX_SPIKES),
+    F + TAX + '&$tax_year=2024&' + ctx({intent: [userRow('How many hours did our people work in the US in tax year 2024?')], observe: TAX_SPIKES}),
     "SELECT sum(work_logs.hours) AS us_hours FROM work_logs WHERE work_logs.work_country = 'US' AND extract(year from work_logs.worked_on) = 2024"),
   Q('us-hours-fy-vs-tax','tax','US hours: calendar year vs fiscal year','How do US hours split between calendar years and project fiscal years?',
     F + "cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'",
@@ -203,17 +204,10 @@ const QUERIES = [
     "INSERT INTO client_hours (row_id, employee, date, hours, work_country) VALUES (23, 'Ana Ruiz', DATE '2025-10-01', 6, 'US') RETURNING *"),
   // v0.2 intent rows: ~intent as an array. The manager's row requires $tax_year; until it is bound the address halts.
   Q('intent-halt','intent','US hours: halts until the tax year is stated','What are the US hours worked in my client CSV?',
-    C + CSV_TAX + '&' + intentRows([USER_ROW, MANAGER_ROW])),
+    C + CSV_TAX + '&' + ctx({intent: [USER_ROW, MANAGER_ROW]})),
   Q('intent-answered','intent','US hours: tax year given, it runs','What are the US hours worked in my client CSV? (2024)',
-    C + CSV_TAX + '&$tax_year=2024&' + intentRows([USER_ROW, MANAGER_ROW]),
+    C + CSV_TAX + '&$tax_year=2024&' + ctx({intent: [USER_ROW, MANAGER_ROW]}),
     "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024"),
-  Q('intent-require-only','intent','Required even though the query never uses it','What are the US hours worked in my client CSV, all years?',
-    C + CSV_ALL + '&' + intentRows([USER_ROW, MANAGER_ROW])),
-  Q('intent-require-only-bound','intent','Required, bound, and the query runs unchanged','What are the US hours worked in my client CSV, all years? (tax year 2024 stated)',
-    C + CSV_ALL + '&$tax_year=2024&' + intentRows([USER_ROW, MANAGER_ROW]),
-    "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US'"),
-  Q('intent-halt-implied','intent','if_empty omitted: HALT is the default','What are the US hours worked in my client CSV?',
-    C + CSV_ALL + '&' + intentRows([USER_ROW, {role: 'manager', text: MANAGER_ROW.text, require: '$tax_year'}])),
   // Resolvable: a registry entry that points to an external location (see data_resolvable.js). Reading shows the
   // location; only an explicit resolve fetches the content. The virtual note with the same path is a different state.
   Q('resolvable-tax-year','resolvable','Resolvable entry: the tax-year rule','Where does tcxp://firm.demo/rules/tax-year point?',

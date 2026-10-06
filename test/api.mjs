@@ -48,10 +48,10 @@ const randomOp = tree => {
   if (r < 0.25 && gaps.length) { const g = pick(gaps); return {op: 'bind', var: g.label.slice(1), value: litFor(T.resolvePointer(tree, g.pointer)[0])}; }
   if (r < 0.35 && bound.length) return {op: 'unbind', var: pick(bound)};
   if (r < 0.5) { const vals = T.query(tree, 'variables').concat(T.query(tree, 'operators')); if (vals.length) { const v = pick(vals); return {op: 'replace', path: v.pointer, expr: v.kind === 'operator' ? 'true' : litFor(T.resolvePointer(tree, v.pointer)[0])}; } }
-  if (r < 0.6) return {op: 'remove', path: '/' + pick(Object.keys(tree.parsed.items).concat(['order', 'where', '~intent']))};
+  if (r < 0.6) return {op: 'remove', path: '/' + pick(Object.keys(tree.parsed.items).concat(['order', 'where', '~context/intent', '~context/observe/0']))};
   if (r < 0.7 && tree.parsed.mode === 'sql') return {op: 'add', key: pick(['order', 'where', 'limit']), expr: pick(['asc(' + (leaves.length ? pick(leaves).label.replace(/^\$/, '') : 'x') + ')', 'true', '5'])};
   if (r < 0.85 && leaves.length) return {op: 'annotate', on: [pick(leaves).pointer], meaning: pick([null, 'Edited by the API test']), structure: null, environment: null};
-  return {op: 'meta', key: pick(['outcome', 'observe', 'intent']), value: pick([[{amount: 5, currency: 'USD'}], 'Edited intent & more', null])};
+  return {op: 'context', key: pick(['intent', 'observe', 'reason', 'decide', 'trace']), value: pick([[{amount: 5, currency: 'USD'}], [{role: 'user', text: 'Edited intent & more'}], ['tcxp://firm.demo/rules/tax-year'], null])};
 };
 let applied = 0, refused = 0;
 for (const uri of corpus) {
@@ -66,17 +66,17 @@ for (const uri of corpus) {
     const f = T.FilterGenerator.filter(out.uri);
     tally('edit result passes FilterGenerator.filter', f.ok, out.uri + ' ' + JSON.stringify(f.rules.filter(r => !r.pass)));
     tally('edit result round-trips', T.serialize(T.parseURI(out.uri)).uri === out.uri && T.serialize(T.parseURI(T.strictForm(out.uri))).uri === out.uri, out.uri);
-    const pulse = out.tree.parsed.meta.find(m => m[0] === 'pulse');
-    tally('edit pulse parent is the previous identity', !!pulse && pulse[1][0].parent === T.identity(tree), out.uri);
+    const pulse = out.tree.parsed.context.trace.find(r => r && r.step !== undefined);
+    tally('edit pulse parent is the fingerprint of the previous full address', !!pulse && pulse.parent === T.fingerprint(cur) && T.lookupAddress(pulse.parent) === T.serialize(T.parseURI(cur)).uri, out.uri);
     cur = out.uri; tree = out.tree;
   }
 }
-// an edit chain: each pulse's parent is the identity of the state before it, and steps count up
+// an edit chain: each pulse's parent is the fingerprint of the full address before it (the store returns it), and steps count up
 {
   const base = T.QUERIES.find(q => q.id === 'us-hours-gap').uri;
   const chain = [[{op: 'bind', var: 'tax_year', value: '2023'}], [{op: 'bind', var: 'tax_year', value: '2024'}], [{op: 'add', key: 'order', expr: 'desc(us_hours)'}], [{op: 'remove', path: '/order'}]];
-  let cur = base, prevId = T.identity(T.parseURI(base)), ok = true, steps = [];
-  chain.forEach((ops, i) => { const out = T.edit(cur, ops, {at: '2026-10-04T13:00:0' + i + '.000Z'}); const p = out.tree.parsed.meta.find(m => m[0] === 'pulse')[1][0]; ok = ok && p.parent === prevId; steps.push(p.step); prevId = T.identity(out.tree); cur = out.uri; });
+  let cur = base, ok = true, steps = [];
+  chain.forEach((ops, i) => { const out = T.edit(cur, ops, {at: '2026-10-04T13:00:0' + i + '.000Z'}); const p = out.tree.parsed.context.trace.find(r => r && r.step !== undefined); ok = ok && T.lookupAddress(p.parent) === cur; steps.push(p.step); cur = out.uri; });
   tally('edit chain: parents trace the history', ok && JSON.stringify(steps) === '[1,2,3,4]', JSON.stringify(steps));
 }
 
@@ -86,7 +86,7 @@ for (const uri of corpus) {
   const def = T.registerCSV('csvtest.demo', 'people', csv);
   tally('registerCSV infers types', JSON.stringify(def.columns.map(c => c[1])) === JSON.stringify(['integer', 'text', 'numeric', 'date', 'text']), JSON.stringify(def.columns));
   const pg = new PGlite(); await pg.exec(T.fullDDL('csvtest.demo'));
-  const t = T.parseURI('!tcxp:/csvtest.demo/sql/select?cols=*&from=people&order=asc(row_id)');
+  const t = T.parseURI(T.fullAddress('!tcxp:/csvtest.demo/sql/select?cols=*&from=people&order=asc(row_id)'));
   const mem = T.execute(t, {store: T.newStore()}).rows.map(r => r.map(nv));
   const g = T.toSQL(t); const pr = (await pg.query(g.sql, g.params, {rowMode: 'array'})).rows.map(r => r.map(nv));
   tally('registerCSV table equals PostgreSQL', JSON.stringify(mem) === JSON.stringify(pr), JSON.stringify([mem, pr]));
@@ -120,7 +120,7 @@ for (const uri of corpus) {
   }
   for (const n of NAMES) {
     let ok = true;
-    try { T.registerCSV(n, n, 'a,b\n1,x\n'); const t = T.parseURI('!tcxp:/' + n + '/sql/select?cols=*&from=' + n); ok = T.execute(t, {store: T.newStore()}).rows.length === 1 && !Object.hasOwn(Object.prototype, 'a'); }
+    try { T.registerCSV(n, n, 'a,b\n1,x\n'); const t = T.parseURI(T.fullAddress('!tcxp:/' + n + '/sql/select?cols=*&from=' + n)); ok = T.execute(t, {store: T.newStore()}).rows.length === 1 && !Object.hasOwn(Object.prototype, 'a'); }
     catch (e) { ok = e instanceof T.TcxpError; }
     finally { if (Object.hasOwn(T.REGISTRIES, n)) delete T.REGISTRIES[n]; }
     tally('registerCSV with a JS-special registry and table name', ok && Object.getPrototypeOf(T.REGISTRIES) === Object.prototype, n);

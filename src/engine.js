@@ -178,20 +178,46 @@ function parseExprList(src, where, allowed) {
   return out;
 }
 
-/* ------------------------------------------------------------ meta values */
-// Meta values are a JSON array of flat rows ("JSON Lines inside an array"), a JSON object, an integer, or text.
-function parseMetaValue(v, key) {
-  const t = v.trim();
-  if (t[0] === '[' || t[0] === '{') {
-    try { return JSON.parse(t); } catch (e) { throw new TcxpError('~' + key + ' is not valid JSON: ' + e.message, '~' + key); }
-  }
-  if (/^-?\d+$/.test(t)) return Number(t);
-  return v;
-}
 // Canonical form stays readable: only the characters that would break parsing are escaped (% & #).
 const encValue = s => s.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23');
 const encLiteral = s => encValue(s).replace(/=/g, '%3D');
-function metaText(v) { return typeof v === 'string' ? encValue(v) : typeof v === 'number' ? String(v) : encValue(JSON.stringify(v)); }
+
+/* ---------------------------------------------------------------- context */
+// Every full address ends with one context key:
+//   ~context={"intent":[…],"observe":[…],"reason":[…],"decide":[…],"trace":[…]}
+// All five arrays are always present, in this order ([] when empty). Each entry is a row (a JSON object whose
+// fields the protocol does not define) or a reference to another address, written bare (as its identity).
+// Nothing in the context changes identity. Reading never resolves, fetches or runs a reference.
+const CONTEXT_KEYS = ['intent', 'observe', 'reason', 'decide', 'trace'];
+const emptyContext = () => ({intent: [], observe: [], reason: [], decide: [], trace: []});
+const isRow = e => e !== null && typeof e === 'object' && !Array.isArray(e);
+// A reference: exactly one of the two formats (optionally after @), with no ~context of its own.
+function isReference(s) {
+  if (typeof s !== 'string') return false;
+  try { return !splitPairs(scanAddress(s).query).some(([k]) => k[0] === '~'); } catch (e) { return false; }
+}
+function readContext(text) {
+  const bad = msg => { throw new TcxpError(msg, '~context', 'context'); };
+  let v;
+  try { v = JSON.parse(text); } catch (e) { bad('~context is not valid JSON: ' + e.message); }
+  if (!isRow(v)) bad('~context is one JSON object: {"intent":[],"observe":[],"reason":[],"decide":[],"trace":[]}');
+  const keys = Object.keys(v);
+  const extra = keys.filter(k => !CONTEXT_KEYS.includes(k)), missing = CONTEXT_KEYS.filter(k => !keys.includes(k));
+  if (extra.length) bad('~context has no key ' + JSON.stringify(extra[0]) + ': its keys are exactly intent, observe, reason, decide, trace');
+  if (missing.length) bad('~context is missing ' + JSON.stringify(missing[0]) + ': all five keys are always present ([] when empty)');
+  if (keys.join() !== CONTEXT_KEYS.join()) bad('~context keys are out of order: they are always intent, observe, reason, decide, trace');
+  const out = emptyContext();
+  CONTEXT_KEYS.forEach(k => {
+    if (!Array.isArray(v[k])) bad('~context.' + k + ' is a JSON array ([] when empty)');
+    v[k].forEach((e, i) => { if (!isRow(e) && !isReference(e)) bad('~context.' + k + '[' + i + '] is neither a row (a JSON object) nor a bare tcxp address'); });
+    out[k] = v[k];
+  });
+  return out;
+}
+// Canonical: compact JSON, keys in the fixed order.
+const contextText = c => encValue(JSON.stringify({intent: c.intent, observe: c.observe, reason: c.reason, decide: c.decide, trace: c.trace}));
+// The pulse row in trace is the row that has a "step"; spike rows in observe are the rows that have "on".
+const pulseRowOf = c => c.trace.find(r => isRow(r) && r.step !== undefined) || null;
 
 /* ------------------------------------------------------------- parse URI */
 function splitPairs(query) {
@@ -207,6 +233,40 @@ function splitPairs(query) {
     out.push([k, v]);
   });
   return out;
+}
+// The query is three parts in order: data keys, $variables, then ~context (always last, always present on a
+// full address). A reference (bare) has no ~context.
+function splitQuery(query, bare) {
+  const data = [], binds = []; let context = null;
+  splitPairs(query).forEach(([k, v]) => {
+    if (k === '~context' && context) throw new TcxpError('~context appears twice', k, 'context');
+    if (context) throw new TcxpError('~context comes last; "' + k + '" appears after it', k, 'context');
+    if (k[0] === '~') {
+      if (k !== '~context') throw new TcxpError('"' + k + '" is not a key: the only ~ key is ~context, which holds intent, observe, reason, decide and trace', k, 'context');
+      if (bare) throw new TcxpError('A reference to an address is written bare, without ~context', k, 'context');
+      context = readContext(v); return;
+    }
+    if (k[0] === '$') { binds.push([k, v]); return; }
+    if (binds.length) throw new TcxpError('Data keys come before $variables; "' + k + '" appears after ' + binds[binds.length - 1][0], k, 'order');
+    if (!k) throw new TcxpError('A key cannot be empty', k);
+    data.push([k, v]);
+  });
+  if (!bare && !context) throw new TcxpError('A full address ends with ~context={"intent":[],"observe":[],"reason":[],"decide":[],"trace":[]}', '~context', 'context');
+  return {data, binds, context: context || emptyContext()};
+}
+function parseBinding(bindings, k, v) {
+  const name = k.slice(1);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new TcxpError('Bad variable name "' + k + '"', k);
+  if (bindings[name]) throw new TcxpError('Variable ' + k + ' is bound twice', k);
+  if (v.startsWith(CALL + SCHEME)) {
+    const inner = parseAddress(v, true);   // a call in a binding is a reference: bare
+    if (inner.parsed.mode !== 'fn') throw new TcxpError('Variable ' + k + ' can only be bound by an @ call to a function, not by a write', k);
+    bindings[name] = {kind:'call', tree: inner};
+  } else {
+    const vals = parseExprList(v, k);
+    if (vals.length !== 1 || vals[0].kind !== 'value') throw new TcxpError('Variable ' + k + ' must be bound to one literal value or an @!tcxp:/ call', k);
+    bindings[name] = vals[0];
+  }
 }
 function route(registry, path) {
   const reg = own(REGISTRIES, registry);
@@ -249,26 +309,22 @@ function scanAddress(input) {
   if (segs.some(x => x === '')) bad('Empty path segment in "' + hierarchy + '": no "//" inside the path and no trailing "/"');
   return {call, form, registry: segs[0], path: segs.slice(1).join('/'), query};
 }
-// A resolvable address (tcxp://<registry>/<path>) is a reference to a registry entry. Parsing it never looks
-// anything up and never fetches. It takes ~meta keys only.
-function parseResolvable(call, registry, path, query) {
+// A resolvable address (tcxp://<registry>/<path>?…) uses the same grammar as a virtual one. Its registry entry is
+// the part before "?". Data keys may have any name; their values are kept as written and given no meaning (a
+// registry entry has no handler). Parsing never looks anything up and never fetches.
+function parseResolvable(call, registry, path, q) {
   if (!path) throw new TcxpError('A resolvable address is "tcxp://<registry>/<path>"; "' + RESOLVABLE + registry + '" has no path', 'path', 'scheme');
-  const meta = [];
-  splitPairs(query).forEach(([k, v]) => {
-    if (k[0] !== '~') throw new TcxpError('A resolvable address (tcxp://…) takes no keys other than ~meta; "' + k + '" is not allowed', k);
-    const name = k.slice(1);
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new TcxpError('Bad meta key "' + k + '"', k);
-    if (meta.some(m => m[0] === name)) throw new TcxpError('Meta key ' + k + ' appears twice', k);
-    meta.push([name, parseMetaValue(v, name)]);
+  const items = dict(), bindings = dict();
+  q.data.forEach(([k, v]) => {
+    if (items[k]) throw new TcxpError('Key "' + k + '" appears twice', k);
+    items[k] = [{kind: 'value', value: v, type: 'text'}];
   });
-  const parsed = {call, form: 'resolvable', registry, path, mode: 'resolvable', items: dict(), bindings: dict(), meta};
+  q.binds.forEach(([k, v]) => parseBinding(bindings, k, v));
+  const parsed = {call, form: 'resolvable', registry, path, mode: 'resolvable', items, bindings, context: q.context};
   const root = {kind: 'reference', name: registry + '/' + path, role: 'resolvable', type: 'location'};
   const diagnostics = call ? [{level: 'info', msg: 'Calling a resolvable address (@tcxp://…) is not supported yet: external calls are not built.'}] : [];
-  // ~intent rows may describe the address, but cannot require variables: a resolvable address takes no bindings.
-  const intentMeta = meta.find(m => m[0] === 'intent');
-  if (readIntent(intentMeta ? intentMeta[1] : undefined, diagnostics).length)
-    diagnostics.push({level: 'error', msg: 'A resolvable address cannot require variables in ~intent: it takes no $bindings'});
-  const tree = {root, parsed, slots: [], diagnostics, intentSlots: [], required: [], gaps: []};
+  Object.keys(bindings).forEach(k => diagnostics.push({level: 'warn', msg: '$' + k + ' is bound but never used'}));
+  const tree = {root, parsed, slots: [], diagnostics, gaps: []};
   tree.spikes = readSpikes(tree);
   tree.spikes.forEach(sp => sp.problems.forEach(msg => diagnostics.push({level: 'warn', msg: 'Annotation ' + sp.id + ': ' + msg})));
   return tree;
@@ -283,14 +339,14 @@ function registerResolvable(entries) {
   (Array.isArray(entries) ? entries : [entries]).forEach(e => {
     const bad = (msg, code) => { throw new TcxpError(msg, 'register', code || 'register'); };
     if (!e || typeof e !== 'object' || typeof e.address !== 'string' || typeof e.location !== 'string') bad('A resolvable entry is {"address": "tcxp://…", "location": "<external location>"}');
-    let tree;
-    try { tree = parseURI(e.address); } catch (err) { bad('Entry address ' + JSON.stringify(e.address) + ' is not an address: ' + err.message); }
-    if (tree.parsed.form !== 'resolvable') bad('Only tcxp:// addresses are registered; ' + e.address + ' is virtual and is never resolved');
-    if (tree.parsed.call || tree.parsed.meta.length || serialize(tree).uri !== e.address) bad('An entry address is exactly "tcxp://<registry>/<path>", with no "@" and no ~meta: ' + JSON.stringify(e.address));
+    let a;
+    try { a = scanAddress(e.address); } catch (err) { bad('Entry address ' + JSON.stringify(e.address) + ' is not an address: ' + err.message); }
+    if (a.form !== 'resolvable') bad('Only tcxp:// addresses are registered; ' + e.address + ' is virtual and is never resolved');
+    if (a.call || e.address.includes('?') || !a.path) bad('An entry address is exactly "tcxp://<registry>/<path>": the part before "?", with no "@": ' + JSON.stringify(e.address));
     const m = LOCATION_SCHEME.exec(e.location);
     if (!m) bad('Location ' + JSON.stringify(e.location) + ' for ' + e.address + ' needs a scheme, such as https: or file:', 'location');
     if (m[1].toLowerCase() === 'tcxp') bad('Location ' + JSON.stringify(e.location) + ' for ' + e.address + ' is a tcxp address; an entry must point to an external location (no chains)', 'location');
-    const registry = tree.parsed.registry;
+    const registry = a.registry;
     const reg = own(REGISTRIES, registry) || setOwn(REGISTRIES, registry, {title: registry, description: 'Registry with resolvable entries.', fns: dict(), notes: dict()});
     if (!Object.hasOwn(reg, 'resolvable')) reg.resolvable = [];
     if (reg.resolvable.some(x => x.address === e.address)) bad(e.address + ' is already registered', 'duplicate');
@@ -332,14 +388,17 @@ async function defaultFetcher(location, opts) {
   }
   throw new Error('no fetcher for ' + scheme + ': locations');
 }
-// resolve(address, {fetcher, base}) -> Promise<content>. The only function that fetches.
+// resolve(address, {fetcher, base}) -> Promise<content>. The only function that fetches. It takes a full
+// address or a bare reference, looks up the part before "?" and fetches; it does not check for gaps.
 async function resolve(address, opts) {
   opts = opts || {};
-  const tree = parseURI(address);
-  if (tree.parsed.form !== 'resolvable') throw new TcxpError(address + ' is virtual: !tcxp:/ addresses are never resolved', 'resolve', 'not-resolvable');
-  if (tree.parsed.call) throw notSupportedCall();
-  const entry = lookupResolvable(address);
-  if (!entry) throw new TcxpError(address + ' is not registered', 'resolve', 'not-registered');
+  const a = scanAddress(address);
+  if (a.form !== 'resolvable') throw new TcxpError(address + ' is virtual: !tcxp:/ addresses are never resolved', 'resolve', 'not-resolvable');
+  if (a.call) throw notSupportedCall();
+  if (address.includes('?')) parseURI(address);   // a full address must be well formed (its gaps do not matter)
+  const key = address.split('?')[0];
+  const entry = lookupResolvable(key);
+  if (!entry) throw new TcxpError(key + ' is not registered', 'resolve', 'not-registered');
   let content;
   try { content = await (opts.fetcher || defaultFetcher)(entry.location, {base: opts.base}); }
   catch (e) { throw new TcxpError('Fetching ' + entry.location + ' for ' + address + ' failed: ' + (e && e.message || e), 'resolve', 'fetch-failed'); }
@@ -348,39 +407,20 @@ async function resolve(address, opts) {
 }
 const notSupportedCall = () => new TcxpError('External calls are not supported yet: @tcxp:// parses as a call on a resolvable address, but invoking an external handler is not built', 'call', 'not-supported');
 
-function parseURI(input) {
+// parseURI takes a full address (with ~context). parseAddress(…, true) reads a bare reference.
+function parseURI(input) { return parseAddress(input, false); }
+function parseAddress(input, bare) {
   const {call, form, registry, path, query} = scanAddress(input);
-  if (form === 'resolvable') return parseResolvable(call, registry, path, query);
+  const q = splitQuery(query, bare);
+  if (form === 'resolvable') return parseResolvable(call, registry, path, q);
   const r = route(registry, path);
   if (call && r.mode !== 'fn' && r.mode !== 'write') throw new TcxpError('"@" calls a function or performs a write, and ' + registry + '/' + path + ' is neither', 'call');
 
-  const items = dict(); const bindings = dict(); const meta = []; const order = [];
-  splitPairs(query).forEach(([k, v]) => {
-    if (meta.length && k[0] !== '~') throw new TcxpError('Meta keys (~) must come last; "' + k + '" appears after ~' + meta[meta.length - 1][0], k);
-    if (k[0] === '~') {
-      const name = k.slice(1);
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new TcxpError('Bad meta key "' + k + '"', k);
-      if (meta.some(m => m[0] === name)) throw new TcxpError('Meta key ' + k + ' appears twice', k);
-      meta.push([name, parseMetaValue(v, name)]); return;
-    }
-    if (k[0] === '$') {
-      const name = k.slice(1);
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new TcxpError('Bad variable name "' + k + '"', k);
-      if (bindings[name]) throw new TcxpError('Variable ' + k + ' is bound twice', k);
-      if (v.startsWith(CALL + SCHEME)) {
-        const inner = parseURI(v);
-        if (inner.parsed.mode !== 'fn') throw new TcxpError('Variable ' + k + ' can only be bound by an @ call to a function, not by a write', k);
-        bindings[name] = {kind:'call', tree: inner};
-      } else {
-        const vals = parseExprList(v, k);
-        if (vals.length !== 1 || vals[0].kind !== 'value') throw new TcxpError('Variable ' + k + ' must be bound to one literal value or an @!tcxp:/ call', k);
-        bindings[name] = vals[0];
-      }
-      return;
-    }
+  const items = dict(); const bindings = dict(); const order = [];
+  q.data.forEach(([k, v]) => {
     if (r.mode === 'sql') {
       const C = own(CLAUSES, k);
-      if (!C) throw new TcxpError('Unknown key "' + k + '". Clause keys are ' + CLAUSE_ORDER.join(', ') + '; variables start with $, meta with ~.', k);
+      if (!C) throw new TcxpError('Unknown key "' + k + '". Clause keys are ' + CLAUSE_ORDER.join(', ') + '; variables start with $, and the context is ~context.', k);
       if (items[k] && !C.repeat) throw new TcxpError('Clause "' + k + '" appears twice', k);
       const list = parseExprList(v, k, SELECT_OPS);
       if (!C.list && !C.repeat && list.length !== 1) throw new TcxpError('Clause "' + k + '" takes one expression', k);
@@ -388,7 +428,7 @@ function parseURI(input) {
       items[k] = (items[k] || []).concat(list);
     } else if (r.mode === 'write') {
       const W = WRITE_CLAUSES[r.op];
-      if (!own(W, k)) throw new TcxpError('Unknown key "' + k + '" for sql/' + r.op + '. Keys are ' + WRITE_ORDER[r.op].join(', ') + '; variables start with $, meta with ~.', k);
+      if (!own(W, k)) throw new TcxpError('Unknown key "' + k + '" for sql/' + r.op + '. Keys are ' + WRITE_ORDER[r.op].join(', ') + '; variables start with $, and the context is ~context.', k);
       if (items[k]) throw new TcxpError('Key "' + k + '" appears twice', k);
       const list = parseExprList(v, k);
       if (!W[k].list && list.length !== 1) throw new TcxpError('Key "' + k + '" takes one expression', k);
@@ -399,7 +439,7 @@ function parseURI(input) {
       if (k !== 'values' && k !== 'set') { const bad = []; (function find(n) { if (n.kind === 'operator' && OPS[n.op].write) bad.push(n.op); (n.children || []).forEach(find); })({children: list}); if (bad.length) throw new TcxpError(bad[0] + '() belongs in ' + (bad[0] === 'row' ? 'values=' : 'set='), k); }
       items[k] = list;
     } else if (r.mode === 'math') {
-      if (k !== 'expr') throw new TcxpError('math/eval takes one key, expr= (plus $variables and ~meta)', k);
+      if (k !== 'expr') throw new TcxpError('math/eval takes one key, expr= (plus $variables and ~context)', k);
       if (items.expr) throw new TcxpError('expr= appears twice', k);
       const list = parseExprList(v, k, MATH_OPS);
       if (list.length !== 1) throw new TcxpError('expr= takes one expression', k);
@@ -412,10 +452,11 @@ function parseURI(input) {
       if (decl.type !== 'text' && Number.isNaN(value)) throw new TcxpError('Parameter "' + k + '" expects a number', k);
       items[k] = [{kind:'value', value, type: decl.type}];
     } else {
-      throw new TcxpError('A note address takes no keys other than ~meta', k);
+      throw new TcxpError('A note address takes no data keys (only $variables and ~context)', k);
     }
     if (!order.includes(k)) order.push(k);
   });
+  q.binds.forEach(([k, v]) => parseBinding(bindings, k, v));
   if (r.mode === 'sql') {
     if (!items.from) throw new TcxpError('A select needs from=', 'from');
     if (items.from[0].kind !== 'reference') throw new TcxpError('from= takes a table name', 'from');
@@ -426,7 +467,7 @@ function parseURI(input) {
     const need = {insert: ['into', 'cols', 'values'], update: ['table', 'set'], delete: ['from']}[r.op];
     need.forEach(k => { if (!items[k]) throw new TcxpError('A' + (r.op === 'delete' ? ' ' : 'n ') + r.op + ' needs ' + k + '=', k); });
   }
-  return buildTree({call, registry, path, mode: r.mode, op: r.op, fn: r.fn, note: r.text, items, bindings, meta});
+  return buildTree({call, form, registry, path, mode: r.mode, op: r.op, fn: r.fn, note: r.text, items, bindings, context: q.context});
 }
 
 /* ----------------------------------------------- tree + type inference */
@@ -498,23 +539,9 @@ function buildTree(parsed) {
     root = {kind:'reference', name: parsed.registry + '/' + parsed.path, role:'note', type:'text'};
   }
 
-  // ~intent rows (v0.2): a row's "require" names a variable that must be bound before anything runs, even
-  // one the query never uses. Such a variable gets its own slot beside the query tree (tree.intentSlots).
-  const intentMeta = parsed.meta.find(m => m[0] === 'intent');
-  const required = readIntent(intentMeta ? intentMeta[1] : undefined, diagnostics);
-  const requiredBy = dict();
-  required.forEach(r => { (requiredBy[r.name] = requiredBy[r.name] || []).push(r); });
-  const intentSlots = [];
-  Object.keys(requiredBy).forEach(name => {
-    if (slotsSeen.includes(name)) return;
-    intentSlots.push({kind:'slot', name, children:[], requiredBy: required.filter(r => r.name === name).map(r => r.row)});
-    slotsSeen.push(name);
-  });
-
   // attach bound values (or nested calls) to variables; unbound variables are gaps
   const allSlots = [];
   (function collect(n) { if (n.kind === 'slot' && !n.param) allSlots.push(n); (n.children || []).forEach(collect); })(root);
-  intentSlots.forEach(s => allSlots.push(s));
   allSlots.forEach(s => {
     const b = bindings[s.name];
     if (!b) return;
@@ -530,15 +557,10 @@ function buildTree(parsed) {
         diagnostics.push({level: s.writeTarget ? 'error' : 'warn', code: s.writeTarget ? '42804' : undefined, msg:'$' + s.name + ' expects ' + baseType(s.type) + ' but is bound to a ' + b.type + ' value'});
     }
   });
-  slotsSeen.forEach(name => {
-    if (bindings[name]) return;
-    const rows = requiredBy[name];
-    diagnostics.push({level:'gap', msg: rows ? '$' + name + ' is a gap: ' + rows.map(r => 'intent row ' + (r.row + 1) + (r.role ? ' (' + r.role + ')' : '')).join(' and ') + ' require' + (rows.length === 1 ? 's' : '') + ' it, so this halts. ' + rows[0].text
-      : '$' + name + ' is a gap: no value is bound, so this cannot run'});
-  });
+  slotsSeen.forEach(name => { if (!bindings[name]) diagnostics.push({level:'gap', msg:'$' + name + ' is a gap: no value is bound, so this halts'}); });
   Object.keys(bindings).forEach(k => { if (!slotsSeen.includes(k)) diagnostics.push({level:'warn', msg:'$' + k + ' is bound but never used'}); });
 
-  const tree = {root, parsed, slots: slotsSeen, diagnostics, intentSlots, required};
+  const tree = {root, parsed, slots: slotsSeen, diagnostics};
   tree.gaps = gapsOf(tree);
   tree.spikes = readSpikes(tree);
   tree.spikes.forEach(sp => sp.problems.forEach(msg => diagnostics.push({level:'warn', msg:'Annotation ' + sp.id + ': ' + msg})));
@@ -576,36 +598,13 @@ function makeWalker(resolveRef, aliases, slotsSeen) {
 function gapsOf(tree) {
   const out = [];
   const walk = n => { if (n.kind === 'slot' && !n.children.length && !out.includes(n.name)) out.push(n.name); (n.children || []).forEach(walk); };
-  walk(tree.root); (tree.intentSlots || []).forEach(walk);
+  walk(tree.root);
   return out;
 }
-// ~intent: a string (legacy: one user row, no requirements) or an array of flat rows
-// {role, text, require: "$v" | ["$a","$b"], if_empty: "HALT"}. The protocol has three states, HALT, ASK and ACT;
-// v0.2 implements HALT only. ASK and ACT are reserved: writing one is an error, never a silent HALT.
-const IF_EMPTY_RESERVED = ['ASK', 'ACT'];
-function readIntent(v, diagnostics) {
-  if (v === undefined || typeof v === 'string' || typeof v === 'number') return [];
-  const rows = Array.isArray(v) ? v : [v];
-  const out = [];
-  rows.forEach((row, i) => {
-    const bad = msg => diagnostics.push({level:'error', msg:'~intent row ' + (i + 1) + ': ' + msg});
-    if (!row || typeof row !== 'object' || Array.isArray(row)) { bad('each row is a JSON object like {"role":"user","text":"…"}'); return; }
-    if (row.require === undefined || row.require === null) { if (row.if_empty !== undefined) bad('if_empty needs require'); return; }
-    const names = Array.isArray(row.require) ? row.require : [row.require];
-    const mode = row.if_empty === undefined ? 'HALT' : row.if_empty;
-    if (IF_EMPTY_RESERVED.includes(mode)) { bad(mode + ' is reserved for a future version; v0.2 supports HALT only'); return; }
-    if (mode !== 'HALT') { bad('if_empty must be "HALT" (or omitted, which means HALT), not ' + JSON.stringify(mode)); return; }
-    names.forEach(n => {
-      if (typeof n !== 'string' || !/^\$[A-Za-z_][A-Za-z0-9_]*$/.test(n)) { bad('require names variables like "$tax_year", not ' + JSON.stringify(n)); return; }
-      out.push({name: n.slice(1), row: i, mode, role: typeof row.role === 'string' ? row.role : null, text: typeof row.text === 'string' ? row.text : ''});
-    });
-  });
-  return out;
-}
-
 /* -------------------------------------------------------------- pointers */
 // A pointer is a path from a URI key to a node: /<key>/<item index>/<child index>/...
-// /$name points at the variable $name (every place it occurs). Coordinates = (pulse step, pointer).
+// /$name points at the variable $name (every place it occurs). /~context/<key>[/<index>] points at a context
+// array or one entry in it. Coordinates = (pulse step, pointer).
 function resolvePointer(tree, ptr) {
   if (typeof ptr !== 'string' || ptr[0] !== '/') return [];
   const segs = ptr.split('/').slice(1).map(s => s.replace(/~1/g, '/').replace(/~0/g, '~'));
@@ -614,8 +613,15 @@ function resolvePointer(tree, ptr) {
   if (key && key[0] === '$') {
     starts = [];
     const walk = n => { if (n.kind === 'slot' && n.name === key.slice(1)) starts.push(n); (n.children || []).forEach(walk); };
-    walk(tree.root); (tree.intentSlots || []).forEach(walk);
+    walk(tree.root);
     return segs.length ? starts.map(s => descend(s.children, segs)).filter(Boolean) : starts;
+  }
+  if (key === '~context') {
+    const c = tree.parsed.context;
+    if (!segs.length || !CONTEXT_KEYS.includes(segs[0])) return [];
+    if (segs.length === 1) return [c[segs[0]]];
+    if (segs.length > 2 || !/^\d+$/.test(segs[1]) || Number(segs[1]) >= c[segs[0]].length) return [];
+    return [c[segs[0]][Number(segs[1])]];
   }
   const list = tree.parsed.items[key];
   if (!list) return [];
@@ -632,17 +638,16 @@ function descend(children, segs) {
 }
 
 /* ------------------------------------------- annotations (spikes) */
-// ~spikes=[{"id":..,"on":[pointers],"meaning":..,"structure":..,"environment":..}]
-// Data is the anchor (the nodes pointed at). Each facet is lit when it holds a resolvable value, dark otherwise.
+// Spike rows live in ~context.observe and are recognised by their "on" field:
+// {"id":..,"on":[pointers],"meaning":..,"structure":..,"environment":..}. Rows without "on" are not spikes.
+// Data is the anchor (the nodes pointed at). Each facet is lit when it holds inline text or a note that exists.
 const FACETS = ['meaning','structure','environment'];
 function resolveNote(addr) {
   if (typeof addr !== 'string' || !addr.startsWith(SCHEME)) return null;
-  try { const t = parseURI(addr); return t.parsed.mode === 'note' ? t.parsed.note : null; } catch (e) { return null; }
+  try { const t = parseAddress(addr, true); return t.parsed.mode === 'note' ? t.parsed.note : null; } catch (e) { return null; }
 }
 function readSpikes(tree) {
-  const m = tree.parsed.meta.find(x => x[0] === 'spikes');
-  if (!m) return [];
-  const rows = Array.isArray(m[1]) ? m[1] : [m[1]];
+  const rows = tree.parsed.context.observe.filter(r => isRow(r) && r.on !== undefined);
   return rows.map((row, i) => {
     const problems = [];
     const id = row && row.id ? String(row.id) : 's' + (i + 1);
@@ -667,7 +672,8 @@ function readSpikes(tree) {
 
 /* ------------------------------------------------- canonical serialization */
 let NID = 0;
-// Returns {uri, tokens}. opts.meta === false drops ~meta keys: that string is the identity of the state.
+// Returns {uri, tokens}. opts.context === false drops ~context: that string is the identity of the state
+// (and the bare form used for references).
 function serialize(tree, opts) {
   opts = opts || {};
   const {parsed} = tree; const toks = [];
@@ -705,6 +711,8 @@ function serialize(tree, opts) {
     });
   } else if (parsed.mode === 'math') {
     sep(); push('expr', 'key'); push('=', 'punct'); ex(parsed.items.expr[0]);
+  } else if (parsed.mode === 'resolvable') {
+    Object.keys(parsed.items).forEach(k => { sep(); push(encLiteral(k), 'key'); push('=', 'punct'); push(encLiteral(String(parsed.items[k][0].value)), 'value', parsed.items[k][0]); });
   } else if (parsed.mode === 'fn') {
     parsed.fn.params.forEach(p => {
       const slot = parsed.items[p.name][0];
@@ -720,11 +728,11 @@ function serialize(tree, opts) {
     const slot = findSlot(tree.root, name);
     sep(); push('$' + name, 'slotkey', slot); push('=', 'punct');
     if (b.kind === 'call') {
-      const inner = serialize(b.tree, {meta:false});
+      const inner = serialize(b.tree, {context:false});
       inner.tokens.forEach(t => toks.push(Object.assign({}, t, {text: t.text.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23')})));
     } else push(valText(b), 'value', slot && slot.children[0]);
   });
-  if (opts.meta !== false) parsed.meta.forEach(([name, v]) => { sep(); push('~' + name, 'metakey'); push('=', 'punct'); push(metaText(v), 'meta'); });
+  if (opts.context !== false) { sep(); push('~context', 'contextkey'); push('=', 'punct'); push(contextText(parsed.context), 'context'); }
   return {uri: toks.map(t => t.text).join(''), tokens: toks};
 }
 function findSlot(n, name) {
@@ -732,11 +740,51 @@ function findSlot(n, name) {
   for (const c of n.children || []) { const r = findSlot(c, name); if (r) return r; }
   return null;
 }
-const identity = tree => serialize(tree, {meta:false}).uri;
-// Intent rows never change identity, but they can decide whether a state runs (ask, gap, default). A stored
-// result is therefore keyed by the identity plus what the intent rows require; with no requirements it is the identity.
-const resultKey = tree => !tree.required || !tree.required.length ? identity(tree)
-  : identity(tree) + ' ~requires ' + JSON.stringify([...new Set(tree.required.map(r => r.name))].sort());
+const identity = tree => serialize(tree, {context:false}).uri;
+// A full address from a bare reference: the reference plus ~context (empty unless given).
+function fullAddress(reference, context) {
+  const t = parseAddress(reference, true);
+  const c = context === undefined ? emptyContext() : readContext(JSON.stringify(context));
+  return serialize(Object.assign({}, t, {parsed: Object.assign({}, t.parsed, {context: c})})).uri;
+}
+
+/* ------------------------------------------------- fingerprints */
+// fingerprint(fullAddress): SHA-256 (lowercase hex) of the full canonical address, context included. Full addresses
+// are kept in a store keyed by fingerprint, so a chain of trace rows whose parent is a fingerprint can be followed
+// back exactly. Pure JavaScript, so it is synchronous and identical in browsers and Node.
+const SHA_K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,
+  0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,
+  0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,
+  0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,
+  0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+function sha256Hex(str) {
+  const bytes = new TextEncoder().encode(str), len = bytes.length, total = Math.ceil((len + 9) / 64) * 64;
+  const m = new Uint8Array(total); m.set(bytes); m[len] = 0x80;
+  const dv = new DataView(m.buffer); dv.setUint32(total - 8, Math.floor(len / 0x20000000)); dv.setUint32(total - 4, (len * 8) >>> 0);
+  const H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19], W = new Uint32Array(64);
+  const ror = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let o = 0; o < total; o += 64) {
+    for (let t = 0; t < 16; t++) W[t] = dv.getUint32(o + t * 4);
+    for (let t = 16; t < 64; t++) {
+      const s0 = ror(W[t-15], 7) ^ ror(W[t-15], 18) ^ (W[t-15] >>> 3), s1 = ror(W[t-2], 17) ^ ror(W[t-2], 19) ^ (W[t-2] >>> 10);
+      W[t] = (W[t-16] + s0 + W[t-7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let t = 0; t < 64; t++) {
+      const t1 = (h + (ror(e, 6) ^ ror(e, 11) ^ ror(e, 25)) + ((e & f) ^ (~e & g)) + SHA_K[t] + W[t]) >>> 0;
+      const t2 = ((ror(a, 2) ^ ror(a, 13) ^ ror(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    [a, b, c, d, e, f, g, h].forEach((x, i) => { H[i] = (H[i] + x) >>> 0; });
+  }
+  return H.map(x => x.toString(16).padStart(8, '0')).join('');
+}
+const canonicalFull = fullAddr => serialize(parseURI(fullAddr)).uri;
+function fingerprint(fullAddr) { return sha256Hex(canonicalFull(fullAddr)); }
+const ADDRESS_STORE = new Map();
+// storeAddress keeps the full canonical address under its fingerprint and returns the fingerprint.
+function storeAddress(fullAddr) { const canon = canonicalFull(fullAddr), fp = sha256Hex(canon); ADDRESS_STORE.set(fp, canon); return fp; }
+function lookupAddress(fp) { return ADDRESS_STORE.has(fp) ? ADDRESS_STORE.get(fp) : null; }
 // Strict transport form: every character outside RFC 3986 unreserved/sub-delims is percent-encoded.
 function strictForm(uri) {
   return uri.replace(/[^A-Za-z0-9\-._~!$&'()*+,;=:@\/?%]/g, c => encodeURIComponent(c)).replace(/%(?![0-9A-Fa-f]{2})/g, '%25');
@@ -877,8 +925,8 @@ function toJSON(tree) {
   return {
     address: identity(tree), call: p.call, ...(p.form === 'resolvable' ? {form: 'resolvable'} : {}), registry: p.registry, path: p.path, profile: p.mode,
     tree: clean(tree.root), gaps: tree.gaps,
-    meta: Object.fromEntries(p.meta),
-    ...(tree.intentSlots && tree.intentSlots.length ? {requires: tree.intentSlots.map(clean)} : {}),
+    context: p.context,
+    ...(p.mode === 'resolvable' && Object.keys(p.items).length ? {data: Object.keys(p.items).map(k => [k, p.items[k][0].value])} : {}),
     // bindings for variables nothing uses (kept so fromJSON loses nothing)
     ...(() => { const extra = Object.keys(p.bindings).filter(k => !tree.slots.includes(k)).map(k => { const b = p.bindings[k];
       return clean({kind:'slot', name:k, children:[b.kind === 'call' ? b.tree.root : b]}); }); return extra.length ? {extra_bindings: extra} : {}; })()
@@ -886,7 +934,7 @@ function toJSON(tree) {
 }
 
 /* ------------------------------------------------------ executor */
-// Gaps block execution: nothing runs while any variable is unbound.
+// An unbound variable halts execution: nothing runs or writes while any variable is unbound.
 // opts.store: the data to read and write (default: this session's store). opts.preview: describe a write without applying it.
 function execute(tree, opts) {
   opts = opts || {};
@@ -895,11 +943,8 @@ function execute(tree, opts) {
   if (err) throw new TcxpError(err.msg, null, err.code);
   const p = tree.parsed;
   if (tree.gaps.length) {
-    // A gap always halts: a variable in the query, or one an intent row requires, has no value. Nothing runs or writes.
-    const res = {kind:'halt', gaps: tree.gaps};
-    const rows = (tree.required || []).filter(r => tree.gaps.includes(r.name));
-    if (rows.length) res.requiredBy = rows.map(r => ({var: r.name, row: r.row, role: r.role, text: r.text}));
-    return res;
+    // The one halt rule: an unbound variable halts, wherever an expression has one. Nothing runs or writes.
+    return {kind:'halt', gaps: tree.gaps};
   }
   return executeReady(tree, opts);
 }
@@ -909,8 +954,9 @@ function executeReady(tree, opts) {
   // Reading a resolvable address shows where its entry points. It never fetches; only resolve() does.
   if (p.mode === 'resolvable') {
     if (p.call) throw notSupportedCall();
-    const e = lookupResolvable(identity(tree));
-    return {kind:'resolvable', address: identity(tree), registered: !!e, location: e ? e.location : null};
+    const entry = RESOLVABLE + p.registry + '/' + p.path;   // the registry entry: the part before "?"
+    const e = lookupResolvable(entry);
+    return {kind:'resolvable', address: entry, registered: !!e, location: e ? e.location : null};
   }
   if (p.mode === 'fn') return p.call ? {kind:'call', value: invoke(tree), returns: p.fn.returns} : {kind:'address'};
   const {vals} = boundValues(tree);
@@ -1278,7 +1324,7 @@ function inverseOf(op, reg, t, changes, it) {
   const base = '@!tcxp:/' + reg + '/sql/';
   const match = r => pk >= 0 ? 'eq(' + names[pk] + ',' + literalOf(r[pk], t.columns[pk][1]) + ')'
     : 'and(' + names.map((n, i) => r[i] === null ? 'isnull(' + n + ')' : 'eq(' + n + ',' + literalOf(r[i], t.columns[i][1]) + ')').join(',') + ')';
-  const canon = s => serialize(parseURI(s)).uri;
+  const canon = s => serialize(parseAddress(s, true), {context: false}).uri;   // a bare reference
   if (op === 'insert') {
     const rows = changes.map(c => c.after);
     const where = pk >= 0 && rows.length > 1 ? 'in(' + names[pk] + ',' + rows.map(r => literalOf(r[pk], t.columns[pk][1])).join(',') + ')'
@@ -1324,6 +1370,7 @@ const isDataKey = k => k[0] !== '$' && k[0] !== '~';
 const allowedOpsFor = mode => mode === 'math' ? MATH_OPS : mode === 'sql' ? SELECT_OPS : undefined;
 // Re-render one data key from a list of item nodes, as raw pairs (join= repeats, other keys are one pair).
 function keyPairs(tree, key, list) {
+  if (tree.parsed.mode === 'resolvable') return list.map(n => ({k: key, raw: encLiteral(key) + '=' + encLiteral(String(n.value))}));
   if (tree.parsed.mode === 'fn') return list.map(n => ({k: key, raw: key + '=' + encLiteral(String(n.value))}));
   if (key === 'join') return list.map(n => ({k: key, raw: 'join=' + exprText(n)}));
   return list.length ? [{k: key, raw: key + '=' + list.map(exprText).join(',')}] : [];
@@ -1361,13 +1408,16 @@ function editAt(list, segs, fn) {
 }
 function applyEdit(uri, tree, op, i) {
   const fail = msg => { throw editError(i, op, msg); };
-  const parse1 = (text, key) => { try { return parseExprList(text, key, allowedOpsFor(tree.parsed.mode)); } catch (e) { fail('the expression "' + text + '" does not parse: ' + e.message); } };
+  const parse1 = (text, key) => {
+    if (tree.parsed.mode === 'resolvable') return [{kind: 'value', value: text, type: 'text'}];   // kept as written, no meaning
+    try { return parseExprList(text, key, allowedOpsFor(tree.parsed.mode)); } catch (e) { fail('the expression "' + text + '" does not parse: ' + e.message); }
+  };
   const pathSegs = path => { if (typeof path !== 'string' || path[0] !== '/') fail('a path starts with "/", like /where/0/1'); return path.split('/').slice(1).map(s => s.replace(/~1/g, '/').replace(/~0/g, '~')); };
   const {head, pairs} = pairsOf(uri);
   switch (op && op.op) {
     case 'bind': {
       if (!op.var || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(op.var)) fail('bind needs var, a variable name without $');
-      if (!tree.slots.includes(op.var) && !requiredVars(tree).includes(op.var)) fail('this address has no variable $' + op.var);
+      if (!tree.slots.includes(op.var)) fail('this address has no variable $' + op.var);
       if (op.value === undefined || op.value === null || String(op.value) === '') fail('bind needs value, written as it would appear in the address (2024, \'text\', date\'2026-01-31\' or an @!tcxp:/ call)');
       const v = String(op.value);
       const raw = v.startsWith(CALL + SCHEME) ? v.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23') : encValue(v);
@@ -1395,7 +1445,7 @@ function applyEdit(uri, tree, op, i) {
     case 'replace': {
       const segs = pathSegs(op.path); const key = segs.shift();
       if (key[0] === '$') fail('replace works on data keys; to change a variable\'s value use bind');
-      if (key[0] === '~') fail('replace works on data keys; to change meta use meta');
+      if (key[0] === '~') fail('replace works on data keys; to change the context use the context op');
       const list = tree.parsed.items[key]; if (!list) fail('this address has no ' + key + '=');
       if (tree.parsed.mode === 'fn') fail('a function parameter is a plain value; edit it with replace on the whole address');
       const repl = parse1(String(op.expr), key);
@@ -1410,7 +1460,14 @@ function applyEdit(uri, tree, op, i) {
     case 'remove': {
       const segs = pathSegs(op.path); const key = segs.shift();
       if (key[0] === '$') { if (!pairs.some(p => p.k === key)) fail(key + ' is not bound'); return joinPairs(head, pairs.filter(p => p.k !== key)); }
-      if (key[0] === '~') { if (!pairs.some(p => p.k === key)) fail('there is no ' + key); return joinPairs(head, pairs.filter(p => p.k !== key)); }
+      if (key === '~context') {
+        const c = Object.assign({}, tree.parsed.context);
+        if (!segs.length || !CONTEXT_KEYS.includes(segs[0])) fail('remove in the context takes /~context/<intent|observe|reason|decide|trace>[/<index>]');
+        if (segs.length === 1) c[segs[0]] = [];
+        else { const idx = Number(segs[1]); if (segs.length > 2 || !Number.isInteger(idx) || idx >= c[segs[0]].length) fail('nothing at ' + op.path); c[segs[0]] = c[segs[0]].filter((_, j) => j !== idx); }
+        return setContext(head, pairs, c);
+      }
+      if (key[0] === '~') fail('the only ~ key is ~context');
       const list = tree.parsed.items[key]; if (!list) fail('this address has no ' + key + '=');
       if (!segs.length) return joinPairs(head, pairs.filter(p => p.k !== key));
       let next;
@@ -1422,6 +1479,7 @@ function applyEdit(uri, tree, op, i) {
       if (!key || !isDataKey(key)) fail('add needs key, a data key such as order or where');
       const repl = parse1(String(op.expr), key);
       const list = tree.parsed.items[key];
+      if (tree.parsed.mode === 'resolvable' && list) fail(key + '= is already set; use replace');
       const C = tree.parsed.mode === 'sql' ? own(CLAUSES, key) : tree.parsed.mode === 'write' ? own(WRITE_CLAUSES[tree.parsed.op], key) : undefined;
       const listy = !!C && !!(C.list || C.repeat);
       if (list && !listy) fail(key + '= is already set and holds one expression; use replace');
@@ -1430,37 +1488,32 @@ function applyEdit(uri, tree, op, i) {
     case 'annotate': {
       const on = Array.isArray(op.on) ? op.on : [op.on];
       if (!on.length || on.some(p => !resolvePointer(tree, p).length)) fail('every pointer in on must resolve to a node; ' + on.filter(p => !resolvePointer(tree, p).length).join(', ') + ' does not');
-      const m = tree.parsed.meta.find(x => x[0] === 'spikes');
-      const rows = m ? (Array.isArray(m[1]) ? m[1].slice() : [m[1]]) : [];
-      const id = op.id || 's' + (rows.length + 1);
-      if (rows.some(r => r && r.id === id)) fail('an annotation ' + id + ' already exists');
-      rows.push({id, on, meaning: op.meaning === undefined ? null : op.meaning, structure: op.structure === undefined ? null : op.structure, environment: op.environment === undefined ? null : op.environment});
-      return setMeta(head, pairs, 'spikes', rows);
+      const c = tree.parsed.context, spikes = c.observe.filter(r => isRow(r) && r.on !== undefined);
+      const id = op.id || 's' + (spikes.length + 1);
+      if (spikes.some(r => r.id === id)) fail('an annotation ' + id + ' already exists');
+      const row = {id, on, meaning: op.meaning === undefined ? null : op.meaning, structure: op.structure === undefined ? null : op.structure, environment: op.environment === undefined ? null : op.environment};
+      return setContext(head, pairs, Object.assign({}, c, {observe: c.observe.concat([row])}));
     }
-    case 'meta': {
-      if (!op.key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(op.key)) fail('meta needs key, a name without ~');
-      return setMeta(head, pairs, op.key, op.value);
+    case 'context': {
+      if (!CONTEXT_KEYS.includes(op.key)) fail('context needs key: intent, observe, reason, decide or trace');
+      if (op.value !== null && op.value !== undefined && !Array.isArray(op.value)) fail('context value is an array of rows and bare addresses (null for [])');
+      return setContext(head, pairs, Object.assign({}, tree.parsed.context, {[op.key]: op.value || []}));
     }
   }
-  throw editError(i, op, 'unknown op. Use bind, unbind, param, replace, remove, add, annotate or meta');
+  throw editError(i, op, 'unknown op. Use bind, unbind, param, replace, remove, add, annotate or context');
 }
-function setMeta(head, pairs, key, value) {
-  const rest = pairs.slice(); const at = rest.findIndex(p => p.k === '~' + key);
-  if (value === null || value === undefined) { if (at >= 0) rest.splice(at, 1); return joinPairs(head, rest); }
-  const pair = {k: '~' + key, raw: '~' + key + '=' + metaText(value)};
-  if (at >= 0) rest[at] = pair; else rest.push(pair);
-  return joinPairs(head, rest);
+function setContext(head, pairs, c) {
+  return joinPairs(head, pairs.filter(p => p.k !== '~context').concat([{k: '~context', raw: '~context=' + contextText(c)}]));
 }
-// Variables a ~intent row requires (Phase C); none in v0.1-style addresses.
-function requiredVars(tree) { return tree.required ? tree.required.map(r => r.name) : []; }
-// opts.pulse (default true) stamps a new ~pulse whose parent is the identity before the edit; opts.at fixes its time.
+// opts.pulse (default true) stamps a new pulse row in ~context.trace whose parent is the fingerprint of the full
+// address before the edit (stored, so lookupAddress returns it); opts.at fixes its time.
 function edit(uri, ops, opts) {
   opts = opts || {};
   if (!Array.isArray(ops)) ops = [ops];
   let tree = parseURI(uri);
-  const before = identity(tree);
-  const prev = tree.parsed.meta.find(m => m[0] === 'pulse');
   let cur = serialize(tree).uri;
+  const before = cur;
+  const prev = pulseRowOf(tree.parsed.context);
   ops.forEach((op, i) => {
     const next = applyEdit(cur, tree, op, i);
     try { tree = parseURI(next); } catch (e) { throw editError(i, op, 'the result would not parse: ' + e.message); }
@@ -1469,8 +1522,8 @@ function edit(uri, ops, opts) {
     cur = serialize(tree).uri;
   });
   if (opts.pulse !== false) {
-    const step = prev && Array.isArray(prev[1]) && prev[1][0] && Number.isInteger(prev[1][0].step) ? prev[1][0].step + 1 : 1;
-    cur = withPulse(tree, step, opts.at, 0, before);
+    const step = prev && Number.isInteger(prev.step) ? prev.step + 1 : 1;
+    cur = withPulse(tree, step, opts.at, 0, storeAddress(before));
     tree = parseURI(cur);
   }
   const f = FilterGenerator.filter(cur);
@@ -1496,8 +1549,7 @@ function allPointers(tree) {
 function query(uri, selector) {
   const tree = typeof uri === 'string' ? parseURI(uri) : uri;
   const [what, arg] = String(selector).split(/:(.*)/s);
-  const pick = test => allPointers(tree).filter(x => test(x.node)).map(x => ({pointer: x.pointer, kind: nodeKindOf(x.node), label: nodeLabel(x.node)}))
-    .concat((tree.intentSlots || []).filter(test).map(n => ({pointer: '/$' + n.name, kind: nodeKindOf(n), label: nodeLabel(n), source: 'intent'})));
+  const pick = test => allPointers(tree).filter(x => test(x.node)).map(x => ({pointer: x.pointer, kind: nodeKindOf(x.node), label: nodeLabel(x.node)}));
   switch (what) {
     case 'gaps': return pick(n => n.kind === 'slot' && !n.param && !n.children.length).concat(
       tree.parsed.mode === 'fn' ? pick(n => n.kind === 'slot' && n.param && !n.children.length) : []);
@@ -1505,12 +1557,14 @@ function query(uri, selector) {
     case 'references': return pick(n => n.kind === 'reference' && (arg === undefined || n.name === arg || n.name.split('.').pop() === arg));
     case 'operators': return pick(n => n.kind === 'operator' && (arg === undefined || n.op === arg));
     case 'annotations': return tree.spikes.flatMap(sp => sp.targets.filter(t => t.nodes.length).map(t => ({pointer: t.ptr, kind: 'annotation', label: sp.id + ' · ' + sp.bits})));
-    case 'pointer': return resolvePointer(tree, arg).map(n => ({pointer: arg, kind: nodeKindOf(n), label: nodeLabel(n)}));
+    case 'pointer': return resolvePointer(tree, arg).map(n => String(arg).startsWith('/~context/')
+      ? {pointer: arg, kind: 'context', label: Array.isArray(n) ? n.length + ' entries' : typeof n === 'string' ? n : 'row'}
+      : {pointer: arg, kind: nodeKindOf(n), label: nodeLabel(n)});
   }
   throw new TcxpError('Unknown selector "' + selector + '". Use gaps, variables, references, references:<name>, operators:<op>, annotations or pointer:<path>', 'query');
 }
 
-// fromJSON: the inverse of toJSON. It rebuilds the address from the tree, profile and meta alone.
+// fromJSON: the inverse of toJSON. It rebuilds the address from the tree, profile and context alone.
 function fromJSON(j) {
   const head = (j.call ? CALL : '') + (j.form === 'resolvable' ? RESOLVABLE : SCHEME) + j.registry + '/' + j.path;
   const pairs = [], binds = [], seen = new Set();
@@ -1523,7 +1577,7 @@ function fromJSON(j) {
       return;
     }
     (n.children || []).forEach(collect);
-  })({children: (j.profile === 'fn' ? [] : [j.tree]).concat(j.requires || [], j.extra_bindings || [])});   // a function's parameter slots are keys, not $bindings
+  })({children: (j.profile === 'fn' ? [] : [j.tree]).concat(j.extra_bindings || [])});   // a function's parameter slots are keys, not $bindings
   const clause = c => c.op.slice('clause:'.length);
   if (j.profile === 'sql' || j.profile === 'write') j.tree.children.forEach(c => {
     if (c.op.startsWith('clause:')) pairs.push(clause(c) + '=' + c.children.map(jt).join(','));
@@ -1531,8 +1585,8 @@ function fromJSON(j) {
   });
   else if (j.profile === 'math') pairs.push('expr=' + jt(j.tree));
   else if (j.profile === 'fn') j.tree.children.slice(1).forEach(p => { if (p.children) pairs.push(p.name + '=' + encLiteral(String(p.children[0].value))); });
-  const meta = Object.entries(j.meta || {}).map(([k, v]) => '~' + k + '=' + metaText(v));
-  const all = pairs.concat(binds, meta);
+  else if (j.profile === 'resolvable') (j.data || []).forEach(([k, v]) => pairs.push(encLiteral(k) + '=' + encLiteral(String(v))));
+  const all = pairs.concat(binds, ['~context=' + contextText(j.context || emptyContext())]);
   return parseURI(head + (all.length ? '?' + all.join('&') : ''));
 }
 
@@ -1585,15 +1639,17 @@ function registerCSV(registry, table, csvText, types) {
 }
 
 /* ------------------------------------------------------- pulse */
-// Each committed state gets one ~pulse row: {step, at, debounce_ms, parent}. Step counts commits, not keystrokes.
-// parent is the identity of the previous committed state (null for the first), so pulses form a chain.
+// Each committed state gets one pulse row in ~context.trace: {step, at, debounce_ms, parent}. Step counts commits,
+// not keystrokes. parent is the fingerprint of the previous committed full address (null for the first), and the
+// address store maps it back, so pulses form a chain. The new pulse row replaces any earlier one and goes first;
+// other trace rows (such as source) are kept.
 const DEBOUNCE_MS = 300;
 // extra adds fields to the row, e.g. {undo: [inverse addresses]} for an executed write.
 function withPulse(tree, step, at, debounce, parent, extra) {
-  const meta = tree.parsed.meta.filter(m => m[0] !== 'pulse');
-  meta.unshift(['pulse', [Object.assign({step, at: at || new Date().toISOString(), debounce_ms: debounce === undefined || debounce === null ? DEBOUNCE_MS : debounce, parent: parent || null}, extra || {})]]);
-  const t = Object.assign({}, tree, {parsed: Object.assign({}, tree.parsed, {meta})});
-  return serialize(t).uri;
+  const c = tree.parsed.context;
+  const row = Object.assign({step, at: at || new Date().toISOString(), debounce_ms: debounce === undefined || debounce === null ? DEBOUNCE_MS : debounce, parent: parent || null}, extra || {});
+  const context = Object.assign({}, c, {trace: [row].concat(c.trace.filter(r => !(isRow(r) && r.step !== undefined)))});
+  return serialize(Object.assign({}, tree, {parsed: Object.assign({}, tree.parsed, {context})})).uri;
 }
 
 /* ------------------------------------------------------ filter generator */
@@ -1601,7 +1657,7 @@ function withPulse(tree, step, at, debounce, parent, extra) {
 // any address against the protocol rules. Generated batches double as property tests.
 const RULES = [
   ['scheme', 'Starts with exactly !tcxp:/ (virtual) or tcxp:// (resolvable), optionally after @'],
-  ['meta-last', 'Every ~meta key comes after every other key'],
+  ['context-last', '~context is present once, after every data key and $variable'],
   ['call-target', '@ is only used on a function, a write or a resolvable address'],
   ['grammar', 'Parses under the profile grammar with no errors'],
   ['canonical', 'Re-serializes to exactly the same string']
@@ -1623,9 +1679,8 @@ class FilterGenerator {
     this.count++;
     const r = this.rand();
     let base = r < 0.6 ? this.sql() : r < 0.85 ? this.math() : this.call();
-    const tree = parseURI(base);
-    const meta = this.meta(tree);
-    return meta.length ? base + (base.includes('?') ? '&' : '?') + meta.join('&') : base;
+    const tree = parseAddress(base, true);
+    return base + (base.includes('?') ? '&' : '?') + '~context=' + contextText(this.context(tree));
   }
   lit(v, fam) {
     if (fam === 'number') return String(v);
@@ -1633,7 +1688,7 @@ class FilterGenerator {
     return "'" + encLiteral(String(v).replace(/'/g, "''")) + "'";
   }
   withBindings(uriNoBind, binds) {
-    const tree = parseURI(uriNoBind);
+    const tree = parseAddress(uriNoBind, true);
     const pairs = tree.slots.filter(s => binds[s] !== undefined).map(s => '$' + s + '=' + binds[s]);
     return pairs.length ? uriNoBind + '&' + pairs.join('&') : uriNoBind;
   }
@@ -1816,9 +1871,9 @@ class FilterGenerator {
       uri = 'delete?from=' + t.name + '&where=' + where() + returning();
     }
     const base = '!tcxp:/' + regName + '/sql/' + uri;
-    const tree = parseURI(base);
+    const tree = parseAddress(base, true);
     const pairs = tree.slots.filter(s => binds[s] !== undefined).map(s => '$' + s + '=' + binds[s]);
-    return serialize(parseURI(pairs.length ? base + '&' + pairs.join('&') : base)).uri;
+    return serialize(parseAddress(pairs.length ? base + '&' + pairs.join('&') : base, true)).uri;   // a full address, empty context
   }
   randomPointer(tree) {
     if (tree.slots.length && this.chance(0.3)) return '/$' + this.pick(tree.slots);
@@ -1829,11 +1884,13 @@ class FilterGenerator {
     while (node.children && node.children.length && this.chance(0.55)) { const i = this.int(node.children.length); path.push(i); node = node.children[i]; }
     return path.join('/');
   }
-  meta(tree) {
-    const parts = [];
+  // The context, from the same random draws as v0.1's separate keys: a pulse row (trace), an intent row, spike rows,
+  // an event row and an outcome row (observe, in that order).
+  context(tree) {
+    const c = emptyContext();
     const notes = []; READ_REGISTRIES.forEach(r => Object.keys(REGISTRIES[r].notes).forEach(n => notes.push('!tcxp:/' + r + '/' + n)));
-    if (this.chance(0.6)) parts.push('~pulse=' + metaText([{step: 1 + this.int(500), at: new Date(Date.UTC(2026, 9, 1 + this.int(28), this.int(24), this.int(60), this.int(60), this.int(1000))).toISOString(), debounce_ms: DEBOUNCE_MS}]));
-    if (this.chance(0.5)) parts.push('~intent=' + metaText(this.pick(PHRASES)));
+    if (this.chance(0.6)) c.trace.push({step: 1 + this.int(500), at: new Date(Date.UTC(2026, 9, 1 + this.int(28), this.int(24), this.int(60), this.int(60), this.int(1000))).toISOString(), debounce_ms: DEBOUNCE_MS});
+    if (this.chance(0.5)) c.intent.push({role: 'user', text: this.pick(PHRASES)});
     if (this.chance(0.5)) {
       const rows = []; const n = 1 + this.int(2);
       for (let i = 0; i < n; i++) {
@@ -1842,11 +1899,11 @@ class FilterGenerator {
         FACETS.forEach(f => { row[f] = this.chance(0.5) ? (this.chance(0.8) ? this.pick(notes) : 'Inline note for ' + f) : null; });
         rows.push(row);
       }
-      if (rows.length) parts.push('~spikes=' + metaText(rows));
+      rows.forEach(r => c.observe.push(r));
     }
-    if (this.chance(0.2)) parts.push('~observe=' + metaText([{from: this.pick(['agent:planner', 'human:analyst', 'sensor:hull-07']), to: this.pick(['human:captain', 'agent:auditor', 'human:cpa']), channel: this.pick(['chat', 'email', 'telemetry'])}]));
-    if (this.chance(0.2)) parts.push('~outcome=' + metaText([{amount: Math.round((this.rand() * 2000 - 1000) * 100) / 100, currency: 'USD'}]));
-    return parts;
+    if (this.chance(0.2)) c.observe.push({from: this.pick(['agent:planner', 'human:analyst', 'sensor:hull-07']), to: this.pick(['human:captain', 'agent:auditor', 'human:cpa']), channel: this.pick(['chat', 'email', 'telemetry'])});
+    if (this.chance(0.2)) c.observe.push({amount: Math.round((this.rand() * 2000 - 1000) * 100) / 100, currency: 'USD'});
+    return c;
   }
   // Check any address against the protocol rules. Returns {ok, rules:[{id, name, pass, msg}]}.
   static filter(uri) {
@@ -1854,8 +1911,7 @@ class FilterGenerator {
     res.scheme = /^@?(?:!tcxp:\/(?!\/)|tcxp:\/\/(?!\/))/.test(uri);
     let keys = [];
     try { const q = uri.indexOf('?'); keys = q < 0 ? [] : splitPairs(uri.slice(q + 1)).map(p => p[0]); } catch (e) { err = e; }
-    const firstMeta = keys.findIndex(k => k[0] === '~');
-    res['meta-last'] = firstMeta < 0 || keys.slice(firstMeta).every(k => k[0] === '~');
+    res['context-last'] = keys.length > 0 && keys[keys.length - 1] === '~context' && keys.filter(k => k[0] === '~').length === 1;
     try { tree = parseURI(uri); } catch (e) { err = e; }
     res['call-target'] = !uri.startsWith('@') || !!(tree && (tree.parsed.mode === 'fn' || tree.parsed.mode === 'write' || tree.parsed.mode === 'resolvable'));
     res.grammar = !!tree && !tree.diagnostics.some(d => d.level === 'error');
@@ -1913,3 +1969,5 @@ const COVERAGE = [
   ['Variables','List-valued variables (IN $ids)','no',null],
   ['Calls','Calls with arguments nested inside expressions','no',null]
 ];
+// Coverage probes are written bare above; as addresses they carry an empty context.
+COVERAGE.forEach(c => { if (c[3] && !c[3].includes('~context=')) c[3] = fullAddress(c[3]); });

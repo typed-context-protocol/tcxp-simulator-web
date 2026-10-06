@@ -18,6 +18,9 @@ const totalCalls = () => calls.fetch + calls.readFile + calls.readFileSync;
 
 // 1. One rejection per aberration, each with an error that names the problem.
 const V = '!tcxp:/registry/math/eval?expr=gt(2,1)', R = 'tcxp://firm.demo/rules/tax-year';
+// A full address carries ~context; V and R above are bare references (as registry entries and bindings are written).
+const F = (ref, ctx) => T.fullAddress(ref, ctx);
+const ctxWith = parts => Object.assign({intent: [], observe: [], reason: [], decide: [], trace: []}, parts);
 const aberrations = [
   ['!tcxp:// (virtual with two slashes)', '!tcxp://registry/math/eval?expr=gt(2,1)', /"!tcxp:\/\/" is not an address format/],
   ['@!tcxp:// (call, virtual with two slashes)', '@!tcxp://registry/hello?do=x', /"!tcxp:\/\/" is not an address format/],
@@ -45,32 +48,36 @@ for (const [name, uri, re] of aberrations) {
   tally('the filter fails it too', !T.FilterGenerator.filter(uri).ok, JSON.stringify(uri));
 }
 tally('missing registry', (() => { try { T.parseURI('!tcxp:/'); return false; } catch (e) { return e.where === 'registry'; } })());
-tally('resolvable needs a path', rejects('tcxp://firm.demo', /has no path/));
+tally('resolvable needs a path', rejects('tcxp://firm.demo?~context=' + encodeURIComponent(JSON.stringify(ctxWith({}))), /has no path/));
 
 // 2. Both formats, and @ on both, parse and round-trip exactly (strict transport form too).
-for (const uri of [V, '@!tcxp:/registry/hello?do=world', R, '@' + R, R + '?~intent=Which tax year?']) {
+for (const uri of [F(V), F('@!tcxp:/registry/hello?do=world'), F(R), F('@' + R), F(R + '?any key=a=b&$v=3', ctxWith({intent: [{role: 'user', text: 'Which tax year?'}]}))]) {
   const t = T.parseURI(uri);
   tally('round-trips exactly', T.serialize(t).uri === uri && T.serialize(T.parseURI(T.strictForm(uri))).uri === uri && T.FilterGenerator.filter(uri).ok, uri);
   tally('fromJSON(toJSON) keeps the address', T.serialize(T.fromJSON(JSON.parse(JSON.stringify(T.toJSON(t))))).uri === uri, uri);
 }
-tally('a resolvable address takes ~meta only', rejects('tcxp://firm.demo/rules/tax-year?x=1') === false && (() => { try { T.parseURI('tcxp://firm.demo/rules/tax-year?x=1'); return false; } catch (e) { return e instanceof T.TcxpError; } })());
+tally('a resolvable address keeps data keys as written, with no meaning', (() => {
+  const t = T.parseURI(F('tcxp://firm.demo/rules/tax-year?x=1&any%20key=a%3Db'));
+  const r = T.execute(t);
+  return t.parsed.items.x[0].value === '1' && t.parsed.items['any key'][0].value === 'a=b' && r.registered && r.address === R && t.gaps.length === 0;
+})());
 
 // 3. tcxp://x and !tcxp:/x are different states, both on one registry.
 for (const path of ['firm.demo/rules/tax-year', 'fleet.demo/env/sea-route']) {
-  const r = T.parseURI('tcxp://' + path), v = T.parseURI('!tcxp:/' + path);
-  tally('tcxp://x and !tcxp:/x are different states', T.identity(r) !== T.identity(v) && T.resultKey(r) !== T.resultKey(v) && T.execute(v).kind === 'note' && T.execute(r).kind === 'resolvable', path);
+  const r = T.parseURI(F('tcxp://' + path)), v = T.parseURI(F('!tcxp:/' + path));
+  tally('tcxp://x and !tcxp:/x are different states', T.identity(r) !== T.identity(v) && T.fingerprint(T.serialize(r).uri) !== T.fingerprint(T.serialize(v).uri) && T.execute(v).kind === 'note' && T.execute(r).kind === 'resolvable', path);
 }
 
 // 4. Parsing, reading, displaying and serializing a tcxp:// address never fetches.
 const before = totalCalls();
-for (const uri of [R, 'tcxp://fleet.demo/env/sea-route', 'tcxp://firm.demo/not/registered', R + '?~pulse=[{"step":1}]']) {
+for (const uri of [F(R), F('tcxp://fleet.demo/env/sea-route'), F('tcxp://firm.demo/not/registered'), F(R + '?k=v', ctxWith({trace: [{step: 1}], observe: ['tcxp://fleet.demo/env/sea-route']}))]) {
   const t = T.parseURI(uri); T.serialize(t); T.identity(t); T.toJSON(t); T.query(t, 'references'); T.strictForm(uri);
-  T.execute(t); T.FilterGenerator.filter(uri); T.edit(uri, [{op: 'meta', key: 'outcome', value: [{amount: 1, currency: 'USD'}]}]);
+  T.execute(t); T.FilterGenerator.filter(uri); T.edit(uri, [{op: 'context', key: 'observe', value: [{amount: 1, currency: 'USD'}]}]);
 }
 T.listResolvable(); T.listResolvable('firm.demo');
 tally('parse, read, display, serialize: no fetch', totalCalls() === before, JSON.stringify(calls));
-tally('reading shows the location', (() => { const r = T.execute(T.parseURI(R)); return r.kind === 'resolvable' && r.registered && r.location === 'file:fixtures/firm-tax-year.md'; })());
-tally('reading an unregistered address says so, without fetching', (() => { const r = T.execute(T.parseURI('tcxp://firm.demo/not/registered')); return r.kind === 'resolvable' && !r.registered && r.location === null; })());
+tally('reading shows the location', (() => { const r = T.execute(T.parseURI(F(R))); return r.kind === 'resolvable' && r.registered && r.location === 'file:fixtures/firm-tax-year.md'; })());
+tally('reading an unregistered address says so, without fetching', (() => { const r = T.execute(T.parseURI(F('tcxp://firm.demo/not/registered'))); return r.kind === 'resolvable' && !r.registered && r.location === null; })());
 
 // 5. resolve: fixture content; unregistered; failed fetch; virtual; @tcxp://.
 const fixture = fs.readFileSync(new URL('../fixtures/firm-tax-year.md', import.meta.url), 'utf8');
@@ -80,7 +87,8 @@ tally('resolve is the call that reads it (exactly once)', calls.readFile === n0 
 const code = async (f) => { try { await f(); return 'none'; } catch (e) { return e instanceof T.TcxpError ? e.code : 'JS ' + e.message; } };
 tally('unregistered address -> error', await code(() => T.resolve('tcxp://firm.demo/not/registered')) === 'not-registered');
 tally('virtual address -> never resolved', await code(() => T.resolve('!tcxp:/firm.demo/rules/tax-year')) === 'not-resolvable');
-tally('exact match: ~meta is part of the address', await code(() => T.resolve(R + '?~intent=x')) === 'not-registered');
+tally('lookup uses the part before ?: a full address with data keys and context resolves the same entry', await T.resolve(F(R + '?k=v&$x=1', ctxWith({intent: [{role: 'user', text: 'x'}]}))) === fixture);
+tally('a reference in the context is never resolved or fetched by reading', (() => { const n = totalCalls(); T.execute(T.parseURI(F(V, ctxWith({observe: [R]})))); return totalCalls() === n; })());
 tally('a non-exact spelling is rejected, not looked up', await code(() => T.resolve(R + '/')) === 'scheme');
 T.registerResolvable({address: 'tcxp://test.demo/missing', location: 'file:fixtures/does-not-exist.md'});
 tally('failed fetch (missing file) -> error', await code(() => T.resolve('tcxp://test.demo/missing')) === 'fetch-failed');
@@ -90,8 +98,8 @@ tally('failed fetch (network off) -> error', await code(() => T.resolve('tcxp://
 tally('an injected fetcher gets the location and its text is returned', await T.resolve('tcxp://test.demo/remote', {fetcher: async loc => 'remote text for ' + loc}) === 'remote text for https://example.com/remote.md');
 tally('an injected fetcher that throws -> error', await code(() => T.resolve('tcxp://test.demo/remote', {fetcher: async () => { throw new Error('boom'); }})) === 'fetch-failed');
 tally('no test reached the network (fetch spy only refused)', calls.fetch === nf + 1, JSON.stringify(calls));
-tally('@tcxp:// parses as a call', (() => { const t = T.parseURI('@' + R); return t.parsed.call && t.parsed.form === 'resolvable'; })());
-tally('@tcxp:// -> not supported yet (execute)', await code(() => T.execute(T.parseURI('@' + R))) === 'not-supported');
+tally('@tcxp:// parses as a call', (() => { const t = T.parseURI(F('@' + R)); return t.parsed.call && t.parsed.form === 'resolvable'; })());
+tally('@tcxp:// -> not supported yet (execute)', await code(() => T.execute(T.parseURI(F('@' + R)))) === 'not-supported');
 tally('@tcxp:// -> not supported yet (resolve)', await code(() => T.resolve('@' + R)) === 'not-supported');
 
 // 6. Registration: duplicates, tcxp locations, virtual or non-exact addresses are errors.
@@ -103,7 +111,7 @@ tally('a virtual location -> error', reg({address: 'tcxp://test.demo/chain3', lo
 tally('a location without a scheme -> error', reg({address: 'tcxp://test.demo/rel', location: 'fixtures/x.md'}) === 'location');
 tally('a virtual address cannot be registered', reg({address: '!tcxp:/test.demo/x', location: 'https://example.com/x'}) === 'register');
 tally('a non-exact address cannot be registered', reg({address: 'tcxp://test.demo//x', location: 'https://example.com/x'}) === 'register');
-tally('an address with @ or ~meta cannot be registered', reg({address: '@tcxp://test.demo/x', location: 'https://example.com/x'}) === 'register' && reg({address: 'tcxp://test.demo/x?~a=1', location: 'https://example.com/x'}) === 'register');
+tally('an address with @ or a query cannot be registered (the entry is the part before ?)', reg({address: '@tcxp://test.demo/x', location: 'https://example.com/x'}) === 'register' && reg({address: 'tcxp://test.demo/x?~a=1', location: 'https://example.com/x'}) === 'register');
 tally('entries list in registration order', JSON.stringify(T.listResolvable('test.demo').map(e => e.address)) === JSON.stringify(['tcxp://test.demo/missing', 'tcxp://test.demo/remote']));
 tally('virtual addresses never appear in the list', T.listResolvable().every(e => e.address.startsWith('tcxp://')));
 delete T.REGISTRIES['test.demo'];

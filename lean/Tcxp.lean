@@ -11,7 +11,9 @@
   and proves:
     1. parse_ser       — round-trip: parsing a serialized tree returns the same tree (lossless).
     2. gap_blocks      — any unbound variable (a gap) makes evaluation return nothing.
-    3. identity_*      — the identity of an address ignores meta and pulses.
+    3. context         — one ~context with five arrays in a fixed order: identity ignores it (identity_*),
+                         its canonical stream round-trips (parse_serAddress), and a missing or out-of-order
+                         key is rejected (missing_context_rejected, wrong_first_key_rejected).
     4. bits_eq_iff     — a spike's 3-bit state equals another's exactly when the same facets are lit.
     5. writes (v0.2)   — gap_blocks_write: a gap in a written value produces no table;
                          delete_after_insert, update_after_update: the inverse restores the table exactly;
@@ -190,30 +192,148 @@ theorem gap_blocks_list (env : String → Option Int) (apply : String → List I
       split <;> simp_all
 end
 
-/-! ## 4. Identity ignores meta and pulses -/
+/-! ## 4. The context: one ~context, five arrays in a fixed order; identity ignores it
 
-/-- An address: data tokens (the tree plus its bindings) and an ordered list of ~meta entries. -/
+  A full address is its data (scheme, path, data keys and $variables, as tokens) followed by one ~context
+  holding five arrays in this order: intent, observe, reason, decide, trace. An entry is a row (its fields are
+  not defined by the protocol, so it is opaque text here) or a bare reference to another address (its tokens). -/
+
+inductive Entry where
+  | row (json : String)
+  | ref (bare : List Tok)
+  deriving Repr, DecidableEq
+
+structure Context where
+  intent  : List Entry
+  observe : List Entry
+  reason  : List Entry
+  decide  : List Entry
+  trace   : List Entry
+  deriving Repr, DecidableEq
+
+def Context.empty : Context := ⟨[], [], [], [], []⟩
+
 structure Address where
-  data : List Tok
-  meta : List (String × String)
+  data    : List Tok
+  context : Context
+  deriving Repr, DecidableEq
 
-/-- Identity: the address with all meta removed. -/
+/-- Identity: the address with ~context removed. -/
 def identity (a : Address) : List Tok := a.data
 
-/-- Stamp a pulse: replace any existing ~pulse and put the new one first. -/
-def withPulse (a : Address) (pulse : String) : Address :=
-  { a with meta := ("pulse", pulse) :: a.meta.filter (fun m => m.1 != "pulse") }
+def withContext (a : Address) (c : Context) : Address := { a with context := c }
 
-/-- Add any meta entry (an annotation, an outcome, an observation). -/
-def withMeta (a : Address) (k v : String) : Address :=
-  { a with meta := a.meta ++ [(k, v)] }
+/-- Stamp a pulse: the new pulse row goes first in trace and replaces earlier pulse rows (whatever `isPulse`
+    recognises); every other trace entry is kept. -/
+def withPulse (isPulse : Entry → Bool) (a : Address) (p : Entry) : Address :=
+  withContext a { a.context with trace := p :: a.context.trace.filter (fun e => !isPulse e) }
 
-theorem identity_withPulse (a : Address) (p : String) : identity (withPulse a p) = identity a := rfl
-theorem identity_withMeta (a : Address) (k v : String) : identity (withMeta a k v) = identity a := rfl
+/-- Nothing in the context changes identity: any context, any pulse. -/
+theorem identity_withContext (a : Address) (c : Context) : identity (withContext a c) = identity a := rfl
+theorem identity_withPulse (f : Entry → Bool) (a : Address) (p : Entry) : identity (withPulse f a p) = identity a := rfl
 
-/-- Two snapshots of one state, stamped at different pulses, have the same identity. -/
-theorem same_state_same_identity (a : Address) (p q : String) :
-    identity (withPulse a p) = identity (withPulse a q) := rfl
+/-- Two snapshots of one state, with any two contexts, have the same identity. -/
+theorem same_state_same_identity (a : Address) (c d : Context) :
+    identity (withContext a c) = identity (withContext a d) := rfl
+
+/-- Canonical token stream of a full address: the data, then each of the five keys in order, each followed by its
+    entries. A key is its position: 0 intent, 1 observe, 2 reason, 3 decide, 4 trace. -/
+inductive ATok where
+  | data  (t : Tok)
+  | key   (k : Nat)
+  | entry (e : Entry)
+  deriving Repr, DecidableEq
+
+def serEntries (k : Nat) (es : List Entry) : List ATok := ATok.key k :: es.map ATok.entry
+
+def serAddress (a : Address) : List ATok :=
+  a.data.map ATok.data ++ (serEntries 0 a.context.intent ++ (serEntries 1 a.context.observe ++
+    (serEntries 2 a.context.reason ++ (serEntries 3 a.context.decide ++ serEntries 4 a.context.trace))))
+
+def takeData : List ATok → List Tok × List ATok
+  | ATok.data t :: rest => ((takeData rest).1.cons t, (takeData rest).2)
+  | rest => ([], rest)
+
+def takeEntries : List ATok → List Entry × List ATok
+  | ATok.entry e :: rest => ((takeEntries rest).1.cons e, (takeEntries rest).2)
+  | rest => ([], rest)
+
+/-- Expect key `k` next; anything else (a missing, extra or out-of-order key) is a rejection. -/
+def expectKey (k : Nat) : List ATok → Option (List Entry × List ATok)
+  | ATok.key j :: rest => if j = k then some (takeEntries rest) else none
+  | _ => none
+
+def parseAddress (ts : List ATok) : Option Address :=
+  match expectKey 0 (takeData ts).2 with
+  | none => none
+  | some (i, r1) => match expectKey 1 r1 with
+    | none => none
+    | some (o, r2) => match expectKey 2 r2 with
+      | none => none
+      | some (re, r3) => match expectKey 3 r3 with
+        | none => none
+        | some (de, r4) => match expectKey 4 r4 with
+          | none => none
+          | some (tr, r5) => if r5 = [] then some ⟨(takeData ts).1, ⟨i, o, re, de, tr⟩⟩ else none
+
+/-- A stream that starts with a key (or is empty) has no data or entries in front. -/
+def startsAtKey : List ATok → Prop
+  | [] => True
+  | ATok.key _ :: _ => True
+  | _ => False
+
+theorem takeData_map (d : List Tok) (rest : List ATok) (h : startsAtKey rest) :
+    takeData (d.map ATok.data ++ rest) = (d, rest) := by
+  induction d with
+  | nil =>
+    match rest, h with
+    | [], _ => rfl
+    | ATok.key _ :: _, _ => rfl
+  | cons t ts ih => simp [takeData, ih]
+
+theorem takeEntries_map (es : List Entry) (rest : List ATok) (h : startsAtKey rest) :
+    takeEntries (es.map ATok.entry ++ rest) = (es, rest) := by
+  induction es with
+  | nil =>
+    match rest, h with
+    | [], _ => rfl
+    | ATok.key _ :: _, _ => rfl
+  | cons e es ih => simp [takeEntries, ih]
+
+theorem expectKey_ser (k : Nat) (es : List Entry) (rest : List ATok) (h : startsAtKey rest) :
+    expectKey k (serEntries k es ++ rest) = some (es, rest) := by
+  simp [serEntries, expectKey, takeEntries_map es rest h]
+
+/-- Round trip: parsing the canonical stream of a full address gives back exactly that address. -/
+theorem parse_serAddress (a : Address) : parseAddress (serAddress a) = some a := by
+  obtain ⟨d, ⟨i, o, re, de, tr⟩⟩ := a
+  have h4 : expectKey 4 (serEntries 4 tr) = some (tr, []) := by
+    have := expectKey_ser 4 tr [] trivial; simpa using this
+  have hd : takeData (serAddress ⟨d, ⟨i, o, re, de, tr⟩⟩) =
+      (d, serEntries 0 i ++ (serEntries 1 o ++ (serEntries 2 re ++ (serEntries 3 de ++ serEntries 4 tr)))) :=
+    takeData_map d _ trivial
+  simp only [parseAddress, hd]
+  rw [expectKey_ser 0 i (serEntries 1 o ++ (serEntries 2 re ++ (serEntries 3 de ++ serEntries 4 tr))) trivial]
+  dsimp only
+  rw [expectKey_ser 1 o (serEntries 2 re ++ (serEntries 3 de ++ serEntries 4 tr)) trivial]
+  dsimp only
+  rw [expectKey_ser 2 re (serEntries 3 de ++ serEntries 4 tr) trivial]
+  dsimp only
+  rw [expectKey_ser 3 de (serEntries 4 tr) trivial]
+  dsimp only
+  rw [h4]
+  rfl
+
+/-- The keys are fixed: a stream whose context starts with any key other than intent is rejected. -/
+theorem wrong_first_key_rejected (d : List Tok) (k : Nat) (rest : List ATok) (hk : k ≠ 0) :
+    parseAddress (d.map ATok.data ++ (ATok.key k :: rest)) = none := by
+  simp [parseAddress, takeData_map d (ATok.key k :: rest) trivial, expectKey, hk]
+
+/-- A full address must have a context: data alone is rejected. -/
+theorem missing_context_rejected (d : List Tok) : parseAddress (d.map ATok.data) = none := by
+  have := takeData_map d [] trivial
+  simp at this
+  simp [parseAddress, this, expectKey]
 
 /-! ## 5. Spike state: three facets, lit or dark -/
 
