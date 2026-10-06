@@ -10,6 +10,19 @@ The protocol constrains only the grammar. Anything expressible in the grammar is
 
 ## 2. Address forms
 
+### Two forms: resolvable and virtual
+
+tcxp has two forms. They are different, not two spellings of one thing:
+
+- **`tcxp://…` is a resolvable address**, resolved through a registry. This is the URI scheme being registered with IANA.
+- **`!tcxp:/…` is a virtual state.** It is not resolved.
+
+Both can exist on a registry, and they are not the same state.
+
+v0.1 and v0.2 implement only the virtual form; the rest of this specification describes it. The resolvable `tcxp://` form will be specified with A3 (external references and the network registry).
+
+### The virtual form
+
 ```
 !tcxp:/<registry>/<path>?<key>=<value>&…&$<var>=<value>&…&~<meta>=<value>&…     an address (names a state)
 @!tcxp:/<registry>/<path>?<param>=<value>&…&~<meta>=<value>&…                   a call (invokes a handler)
