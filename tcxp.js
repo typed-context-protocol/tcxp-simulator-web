@@ -968,7 +968,7 @@ function toSQL(tree, opts) {
   if (p.mode !== 'sql' && p.mode !== 'math' && p.mode !== 'write') return null;
   const params = []; const order = [];
   const gapless = !tree.gaps.length;
-  const bv = gapless ? boundValues(tree) : {vals:{}, via:{}};
+  const bv = gapless ? boundValues(tree) : {vals: dict(), via: dict()};
   const castSlots = p.mode === 'math';
   function slotRef(name) {
     let i = order.indexOf(name);
