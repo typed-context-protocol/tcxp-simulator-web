@@ -113,7 +113,6 @@ These are edges no vector covers, where matching V8 exactly was not worth the co
 - Date strings that are not ISO 8601 (V8's legacy date parser) compare as invalid dates in Python.
 - `pow` with non-integer exponents may differ in the last bit between V8 and the C library.
 - A failed fetch reports the operating system's own error text after `Fetching … failed: `.
-- On a `tcxp://` address, data keys keep the order they were written in (RULES.md R20) for every key name. `tcxp.js` 0.2.0 moves integer-like key names (such as `2`) first.
 
 ## License
 

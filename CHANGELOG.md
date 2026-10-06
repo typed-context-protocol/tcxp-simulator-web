@@ -77,7 +77,6 @@ Known differences (no vector covers them):
 - non-ISO date strings
 - the last bit of `pow` with a fractional exponent
 - the operating system's text in a failed fetch
-- **data-key order on `tcxp://` addresses.** Python keeps the written order for every key (RULES.md R20); `tcxp.js` moves integer-like key names first.
 
 ## 0.1.0 (2026-10-05)
 

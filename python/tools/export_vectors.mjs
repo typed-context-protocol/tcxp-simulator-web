@@ -122,6 +122,7 @@ const RAW = [
   full('!@!tcxp:/registry/hello?do=x'), full('@@!tcxp:/registry/hello?do=x'), full('ftp://firm.demo/x'), '!tcxp:/?' + EMPTY, 'tcxp://?' + EMPTY,
   full('tcxp://firm.demo'), full('tcxp://firm.demo/'), full('tcxp://firm.demo/rules/tax-year'), full('tcxp://nowhere.demo/x/y'),
   full('@tcxp://firm.demo/rules/tax-year'), full('tcxp://firm.demo/rules/tax-year?b=1&a=two words&c=x%3Dy'),
+  full('tcxp://firm.demo/rules/tax-year?b=1&2=x&a=y&10=z&0=w'), full('tcxp://firm.demo/rules/tax-year?0=a&1=b&$v=1'),
   full('tcxp://firm.demo/rules/tax-year?a=1&a=2'), full('tcxp://firm.demo/rules/tax-year?=1'), full("tcxp://firm.demo/rules/tax-year?a=1&$v=3"),
   full('tcxp://firm.demo/rules/tax-year?$v=@!tcxp:/school.demo/fn/current_cohort'), full('tcxp://firm.demo/rules/tax-year?a=1&$v=x(1)'),
   'tcxp://firm.demo/rules/tax-year', 'tcxp://firm.demo/rules/tax-year?a=1',
