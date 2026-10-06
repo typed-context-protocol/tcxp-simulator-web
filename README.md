@@ -26,13 +26,12 @@ npm install @tcxp/tcxp  # JavaScript
 pip install tcxp        # Python: same engine, same results (see python/)
 ```
 
-The published packages are **0.1.0**, which has none of the v0.2 features above (it takes v0.1 addresses, without `~context`, and reports a gap as kind `gap`). v0.2 ships as 0.2.0 once the Python port matches it; until then, use `tcxp.js` from this branch.
+Both packages are **0.2.0**: the v0.2 grammar above, every full address ending with `~context`. The previous release, 0.1.0, takes v0.1 addresses (no `~context`) and reports a gap as kind `gap`; see `CHANGELOG.md` for every breaking change.
 
 The two registries use different names for the same engine. npm blocks the plain name `tcxp` as too similar to existing packages, so the npm package is scoped as `@tcxp/tcxp`. On PyPI it is `tcxp`.
 
 ```js
 const tcxp = require('@tcxp/tcxp');
-// v0.2 form; with the published 0.1.0, leave out the &~context=… part
 const uri = "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'"
   + '&~context={"intent":[],"observe":[],"reason":[],"decide":[],"trace":[]}';
 const tree = tcxp.parseURI(uri);

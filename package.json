@@ -1,6 +1,6 @@
 {
   "name": "@tcxp/tcxp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Typed Context Protocol (tcxp) v0.2 reference engine: one-line addresses that parse into expression trees, carry their own context, and run",
   "keywords": ["tcxp", "typed-context-protocol", "uri", "query", "sql", "expression-tree", "decision-state", "provenance"],
   "author": "Ron Itelman",

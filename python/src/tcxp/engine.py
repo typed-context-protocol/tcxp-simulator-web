@@ -11,8 +11,12 @@ import builtins
 import calendar
 import copy
 import functools
+import hashlib
 import math
+import os
 import re
+import urllib.parse
+import urllib.request
 from typing import Any, Callable, Dict, Iterator, List, NoReturn, Optional, Tuple
 
 from . import _data
@@ -63,7 +67,9 @@ WRITE_CLAUSES: Dict[str, Dict[str, Dict[str, Any]]] = _data.WRITE_CLAUSES
 WRITE_ORDER: Dict[str, List[str]] = _data.WRITE_ORDER
 RULES: List[List[str]] = _data.RULES
 FACETS: List[str] = _data.FACETS
-SCHEME: str = _data.SCHEME
+SCHEME: str = _data.SCHEME              # the virtual format: never resolved
+RESOLVABLE: str = _data.RESOLVABLE      # the resolvable format: a registry entry that points to an external location
+CONTEXT_KEYS: List[str] = _data.CONTEXT_KEYS
 DEBOUNCE_MS: int = _data.DEBOUNCE_MS
 CALL = '@'
 
@@ -257,19 +263,6 @@ def _parse_expr_list(src: str, where: str, allowed: Optional[set] = None) -> Lis
     return out
 
 
-# ---------------------------------------------------------------- meta values
-def _parse_meta_value(v: str, key: str) -> Any:
-    t = trim(v)
-    if t[:1] in ('[', '{'):
-        try:
-            return parse_json(t)
-        except JSONSyntaxError as e:
-            raise TcxpError('~' + key + ' is not valid JSON: ' + str(e), '~' + key) from None
-    if re.fullmatch(r'-?[0-9]+', t):
-        return norm(float(t))
-    return v
-
-
 def _enc_value(s: str) -> str:
     return s.replace('%', '%25').replace('&', '%26').replace('#', '%23')
 
@@ -278,12 +271,88 @@ def _enc_literal(s: str) -> str:
     return _enc_value(s).replace('=', '%3D')
 
 
-def _meta_text(v: Any) -> str:
-    if isinstance(v, str):
-        return _enc_value(v)
-    if isinstance(v, (int, float)) and not isinstance(v, bool):
-        return num_to_str(v)
-    return _enc_value(stringify(v))
+# ---------------------------------------------------------------- context
+# Every full address ends with one context key:
+#   ~context={"intent":[…],"observe":[…],"reason":[…],"decide":[…],"trace":[…]}
+# All five arrays are always present, in this order ([] when empty). Each entry is a row (a JSON object whose
+# fields the protocol does not define) or a reference to another address, written bare (as its identity).
+# Nothing in the context changes identity. Reading never resolves, fetches or runs a reference.
+def _empty_context() -> Dict[str, List[Any]]:
+    return {'intent': [], 'observe': [], 'reason': [], 'decide': [], 'trace': []}
+
+
+def _is_row(e: Any) -> bool:
+    return isinstance(e, dict)
+
+
+# A reference: exactly one of the two formats (optionally after @), with no ~context of its own.
+def _is_reference(s: Any) -> bool:
+    if not isinstance(s, str):
+        return False
+    try:
+        return not any(k[:1] == '~' for k, _ in _split_pairs(_scan_address(s)['query']))
+    except Exception:
+        return False
+
+
+# JSON whitespace (space, tab, newline, carriage return) outside string literals.
+def _has_json_whitespace(text: str) -> bool:
+    in_str = False
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if in_str:
+            if ch == '\\':
+                i += 1
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in ' \t\n\r':
+            return True
+        i += 1
+    return False
+
+
+def _read_context(text: str) -> Dict[str, List[Any]]:
+    def bad(msg: str) -> NoReturn:
+        raise TcxpError(msg, '~context', 'context')
+    try:
+        v = parse_json(text)
+    except JSONSyntaxError as e:
+        bad('~context is not valid JSON: ' + str(e))
+    if _has_json_whitespace(text):
+        bad('~context is written compactly: no whitespace outside strings')
+    if not _is_row(v):
+        bad('~context is one JSON object: {"intent":[],"observe":[],"reason":[],"decide":[],"trace":[]}')
+    keys = object_keys(v)
+    extra = [k for k in keys if k not in CONTEXT_KEYS]
+    missing = [k for k in CONTEXT_KEYS if k not in keys]
+    if extra:
+        bad('~context has no key ' + stringify(extra[0]) + ': its keys are exactly intent, observe, reason, decide, trace')
+    if missing:
+        bad('~context is missing ' + stringify(missing[0]) + ': all five keys are always present ([] when empty)')
+    if keys != CONTEXT_KEYS:
+        bad('~context keys are out of order: they are always intent, observe, reason, decide, trace')
+    out = _empty_context()
+    for k in CONTEXT_KEYS:
+        if not isinstance(v[k], list):
+            bad('~context.' + k + ' is a JSON array ([] when empty)')
+        for i, entry in enumerate(v[k]):
+            if not _is_row(entry) and not _is_reference(entry):
+                bad('~context.' + k + '[' + str(i) + '] is neither a row (a JSON object) nor a bare tcxp address')
+        out[k] = v[k]
+    return out
+
+
+# Canonical: compact JSON, keys in the fixed order.
+def _context_text(c: Dict[str, List[Any]]) -> str:
+    return _enc_value(stringify({'intent': c['intent'], 'observe': c['observe'], 'reason': c['reason'], 'decide': c['decide'], 'trace': c['trace']}))
+
+
+# The pulse row in trace is the row that has a "step"; spike rows in observe are the rows that have "on".
+def _pulse_row_of(c: Dict[str, List[Any]]) -> Optional[Dict[str, Any]]:
+    return next((r for r in c['trace'] if _is_row(r) and 'step' in r), None)
 
 
 # ---------------------------------------------------------------- parse URI
@@ -304,6 +373,55 @@ def _split_pairs(query: str) -> List[List[str]]:
             raise TcxpError('Bad percent-encoding in "' + pair + '"', pair) from None
         out.append([k, v])
     return out
+
+
+# The query is three parts in order: data keys, $variables, then ~context (always last, always present on a
+# full address). A reference (bare) has no ~context.
+def _split_query(query: str, bare: bool) -> Dict[str, Any]:
+    data: List[List[str]] = []
+    binds: List[List[str]] = []
+    context: Optional[Dict[str, List[Any]]] = None
+    for k, v in _split_pairs(query):
+        if k == '~context' and context is not None:
+            raise TcxpError('~context appears twice', k, 'context')
+        if context is not None:
+            raise TcxpError('~context comes last; "' + k + '" appears after it', k, 'context')
+        if k[:1] == '~':
+            if k != '~context':
+                raise TcxpError('"' + k + '" is not a key: the only ~ key is ~context, which holds intent, observe, reason, decide and trace', k, 'context')
+            if bare:
+                raise TcxpError('A reference to an address is written bare, without ~context', k, 'context')
+            context = _read_context(v)
+            continue
+        if k[:1] == '$':
+            binds.append([k, v])
+            continue
+        if binds:
+            raise TcxpError('Data keys come before $variables; "' + k + '" appears after ' + binds[-1][0], k, 'order')
+        if not k:
+            raise TcxpError('A key cannot be empty', k)
+        data.append([k, v])
+    if not bare and context is None:
+        raise TcxpError('A full address ends with ~context={"intent":[],"observe":[],"reason":[],"decide":[],"trace":[]}', '~context', 'context')
+    return {'data': data, 'binds': binds, 'context': context if context is not None else _empty_context()}
+
+
+def _parse_binding(bindings: Dict[str, Node], k: str, v: str) -> None:
+    name = k[1:]
+    if not _NAME_RE.fullmatch(name):
+        raise TcxpError('Bad variable name "' + k + '"', k)
+    if name in bindings:
+        raise TcxpError('Variable ' + k + ' is bound twice', k)
+    if v.startswith(CALL + SCHEME):
+        inner = _parse_address(v, True)   # a call in a binding is a reference: bare
+        if inner['parsed']['mode'] != 'fn':
+            raise TcxpError('Variable ' + k + ' can only be bound by an @ call to a function, not by a write', k)
+        bindings[name] = {'kind': 'call', 'tree': inner}
+    else:
+        vals = _parse_expr_list(v, k)
+        if len(vals) != 1 or vals[0]['kind'] != 'value':
+            raise TcxpError('Variable ' + k + ' must be bound to one literal value or an @!tcxp:/ call', k)
+        bindings[name] = vals[0]
 
 
 def _route(registry: str, path: str) -> Dict[str, Any]:
@@ -328,65 +446,206 @@ def _route(registry: str, path: str) -> Dict[str, Any]:
     raise TcxpError('Nothing at "' + registry + '/' + path + '". Try sql/select, sql/insert, sql/update, sql/delete, math/eval, a function or a note.', 'path')
 
 
-def parse_uri(input: Optional[str]) -> Tree:
-    """Parse an address (``!tcxp:/…`` or ``@!tcxp:/…``) into a tree. Raises TcxpError."""
-    uri = trim(input or '')
-    call = False
-    if uri.startswith(CALL):
+# Exactly two address formats, optionally preceded by "@": "!tcxp:/<registry>/<path>" (virtual) and
+# "tcxp://<registry>/<path>" (resolvable). Input must be exact: no trimming, no rewriting, no empty segments.
+def _scan_address(input: Any) -> Dict[str, Any]:
+    def bad(msg: str) -> NoReturn:
+        raise TcxpError(msg, 'scheme', 'scheme')
+    uri = input if isinstance(input, str) else ''
+    if uri != trim(uri):
+        bad('An address cannot begin or end with whitespace')
+    rest, call = uri, False
+    if rest.startswith(CALL):
         call = True
-        uri = uri[1:]
-    if not uri.startswith(SCHEME):
-        raise TcxpError('An address starts with "!tcxp:/" (or "@!tcxp:/" to call a function)', 'scheme')
-    rest = uri[len(SCHEME):]
-    if rest.startswith('/'):
         rest = rest[1:]
+    if rest.startswith(SCHEME):
+        rest = rest[len(SCHEME):]
+        form = 'virtual'
+        if rest.startswith('//'):
+            bad('"!tcxp:///" has empty path segments: a virtual address is "!tcxp:/<registry>/<path>"')
+        if rest.startswith('/'):
+            bad('"!tcxp://" is not an address format: a virtual address is "!tcxp:/" (one slash), and a resolvable one is "tcxp://" (no "!")')
+    elif rest.startswith(RESOLVABLE):
+        rest = rest[len(RESOLVABLE):]
+        form = 'resolvable'
+        if rest.startswith('/'):
+            bad('"tcxp:///" has an empty registry: a resolvable address is "tcxp://<registry>/<path>"')
+    elif rest.startswith('tcxp:/'):
+        bad('"tcxp:/" with one slash is not an address format: write "!tcxp:/" (virtual) or "tcxp://" (resolvable)')
+    else:
+        bad('An address is exactly "!tcxp:/<registry>/<path>" (virtual) or "tcxp://<registry>/<path>" (resolvable), optionally preceded by "@" to call it')
     qi = rest.find('?')
     hierarchy = rest if qi < 0 else rest[:qi]
     query = '' if qi < 0 else rest[qi + 1:]
-    segs = [s for s in hierarchy.split('/') if s]
-    if not segs:
-        raise TcxpError('Missing registry after !tcxp:/', 'registry')
-    registry, path = segs[0], '/'.join(segs[1:])
+    if not hierarchy:
+        raise TcxpError('Missing registry after ' + (SCHEME if form == 'virtual' else RESOLVABLE), 'registry', 'scheme')
+    segs = hierarchy.split('/')
+    if any(x == '' for x in segs):
+        bad('Empty path segment in "' + hierarchy + '": no "//" inside the path and no trailing "/"')
+    return {'call': call, 'form': form, 'registry': segs[0], 'path': '/'.join(segs[1:]), 'query': query}
+
+
+# A resolvable address (tcxp://<registry>/<path>?…) uses the same grammar as a virtual one. Its registry entry is
+# the part before "?". Data keys may have any name; their values are kept as written and given no meaning (a
+# registry entry has no handler). Parsing never looks anything up and never fetches.
+def _parse_resolvable(call: bool, registry: str, path: str, q: Dict[str, Any]) -> Tree:
+    if not path:
+        raise TcxpError('A resolvable address is "tcxp://<registry>/<path>"; "' + RESOLVABLE + registry + '" has no path', 'path', 'scheme')
+    items: Dict[str, List[Node]] = {}
+    bindings: Dict[str, Node] = {}
+    for k, v in q['data']:
+        if k in items:
+            raise TcxpError('Key "' + k + '" appears twice', k)
+        items[k] = [{'kind': 'value', 'value': v, 'type': 'text'}]
+    for k, v in q['binds']:
+        _parse_binding(bindings, k, v)
+    parsed = {'call': call, 'form': 'resolvable', 'registry': registry, 'path': path, 'mode': 'resolvable', 'items': items,
+              'bindings': bindings, 'context': q['context']}
+    root: Node = {'kind': 'reference', 'name': registry + '/' + path, 'role': 'resolvable', 'type': 'location'}
+    diagnostics: List[Dict[str, Any]] = (
+        [{'level': 'info', 'msg': 'Calling a resolvable address (@tcxp://…) is not supported yet: external calls are not built.'}] if call else [])
+    for k in bindings:
+        diagnostics.append({'level': 'warn', 'msg': '$' + k + ' is bound but never used'})
+    tree: Tree = {'root': root, 'parsed': parsed, 'slots': [], 'diagnostics': diagnostics, 'gaps': []}
+    tree['spikes'] = _read_spikes(tree)
+    for sp in tree['spikes']:
+        for msg in sp['problems']:
+            diagnostics.append({'level': 'warn', 'msg': 'Annotation ' + sp['id'] + ': ' + msg})
+    return tree
+
+
+# ---------------------------------------------------------------- resolvable entries
+# A registry holds an ordered list of resolvable entries {address, location}. The address is an exact tcxp://
+# address whose first segment names the registry; the location is an external, non-tcxp location. Lookup is an
+# exact string match. Only resolve() fetches, and only when called; nothing else in the engine ever does.
+_LOCATION_SCHEME = re.compile(r'([A-Za-z][A-Za-z0-9+.-]*):')
+
+
+def register_resolvable(entries: Any) -> None:
+    """Register ``{'address': 'tcxp://<registry>/<path>', 'location': '<external location>'}`` (or a list of them)."""
+    for e in (entries if isinstance(entries, list) else [entries]):
+        def bad(msg: str, code: Optional[str] = None) -> NoReturn:
+            raise TcxpError(msg, 'register', code or 'register')
+        if not isinstance(e, dict) or not isinstance(e.get('address'), str) or not isinstance(e.get('location'), str):
+            bad('A resolvable entry is {"address": "tcxp://…", "location": "<external location>"}')
+        try:
+            a = _scan_address(e['address'])
+        except TcxpError as err:
+            bad('Entry address ' + stringify(e['address']) + ' is not an address: ' + str(err))
+        if a['form'] != 'resolvable':
+            bad('Only tcxp:// addresses are registered; ' + e['address'] + ' is virtual and is never resolved')
+        if a['call'] or '?' in e['address'] or not a['path']:
+            bad('An entry address is exactly "tcxp://<registry>/<path>": the part before "?", with no "@": ' + stringify(e['address']))
+        m = _LOCATION_SCHEME.match(e['location'])
+        if not m:
+            bad('Location ' + stringify(e['location']) + ' for ' + e['address'] + ' needs a scheme, such as https: or file:', 'location')
+        if m.group(1).lower() == 'tcxp':
+            bad('Location ' + stringify(e['location']) + ' for ' + e['address'] + ' is a tcxp address; an entry must point to an external location (no chains)', 'location')
+        registry = a['registry']
+        reg = REGISTRIES.get(registry)
+        if not reg:
+            bad('Registry ' + stringify(registry) + ' does not exist; ' + e['address'] + ' cannot be registered', 'unknown-registry')
+        lst = reg.setdefault('resolvable', [])
+        if any(x['address'] == e['address'] for x in lst):
+            bad(e['address'] + ' is already registered', 'duplicate')
+        lst.append({'address': e['address'], 'location': e['location']})
+
+
+def list_resolvable(registry: Optional[str] = None) -> List[Dict[str, str]]:
+    """Entries in order: one registry's, or every registry's (registries in order, entries in registration order)."""
+    regs = list(REGISTRIES.keys()) if registry is None else [registry]
+    out: List[Dict[str, str]] = []
+    for r in regs:
+        reg = REGISTRIES.get(r)
+        if reg and 'resolvable' in reg:
+            out.extend({'address': e['address'], 'location': e['location']} for e in reg['resolvable'])
+    return out
+
+
+def _lookup_resolvable(address: str) -> Optional[Dict[str, str]]:
+    for reg in REGISTRIES.values():
+        for e in reg.get('resolvable') or []:
+            if e['address'] == address:
+                return e
+    return None
+
+
+# The default fetcher reads file: locations (relative paths against base, which defaults to this package's
+# directory, where the demo fixtures ship) and http(s): locations.
+_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _default_fetcher(location: str, opts: Dict[str, Any]) -> str:
+    m = _LOCATION_SCHEME.match(location)
+    scheme = m.group(1).lower() if m else ''
+    if scheme == 'file':
+        rest = location[5:]
+        if rest.startswith('//'):
+            path = urllib.request.url2pathname(urllib.parse.urlparse(location).path)
+        else:
+            path = os.path.join(opts.get('base') or _PACKAGE_DIR, decode_uri_component(rest))
+        with open(path, encoding='utf-8') as f:
+            return f.read()
+    if scheme in ('https', 'http'):
+        with urllib.request.urlopen(location) as res:  # noqa: S310 - an explicit, registered location
+            data: bytes = res.read()
+            return data.decode('utf-8')
+    raise Exception('no fetcher for ' + scheme + ': locations')
+
+
+def _not_supported_call() -> TcxpError:
+    return TcxpError('External calls are not supported yet: @tcxp:// parses as a call on a resolvable address, but invoking an external handler is not built',
+                     'call', 'not-supported')
+
+
+def resolve(address: str, fetcher: Optional[Callable[[str, Dict[str, Any]], Any]] = None, base: Optional[str] = None) -> str:
+    """The content at a registered tcxp:// address's location. The only function that fetches.
+
+    Takes a full address or a bare reference, looks up the part before "?" and fetches; it does not check
+    for gaps. ``fetcher(location, {'base': base})`` replaces the default (file: and http(s):)."""
+    a = _scan_address(address)
+    if a['form'] != 'resolvable':
+        raise TcxpError(address + ' is virtual: !tcxp:/ addresses are never resolved', 'resolve', 'not-resolvable')
+    if a['call']:
+        raise _not_supported_call()
+    if '?' in address:
+        parse_uri(address)   # a full address must be well formed (its gaps do not matter)
+    key = address.split('?')[0]
+    entry = _lookup_resolvable(key)
+    if not entry:
+        raise TcxpError(key + ' is not registered', 'resolve', 'not-registered')
+    try:
+        content = (fetcher or _default_fetcher)(entry['location'], {'base': base})
+    except Exception as e:  # noqa: BLE001 - any fetch failure is reported the same way
+        raise TcxpError('Fetching ' + entry['location'] + ' for ' + address + ' failed: ' + str(e), 'resolve', 'fetch-failed') from None
+    if not isinstance(content, str):
+        raise TcxpError('Fetching ' + entry['location'] + ' for ' + address + ' failed: the fetcher returned no text', 'resolve', 'fetch-failed')
+    return content
+
+
+def parse_uri(input: Optional[str]) -> Tree:
+    """Parse a full address (``!tcxp:/…`` or ``tcxp://…``, optionally after ``@``, ending with ``~context``)."""
+    return _parse_address(input, False)
+
+
+def _parse_address(input: Any, bare: bool) -> Tree:
+    a = _scan_address(input)
+    call, form, registry, path = a['call'], a['form'], a['registry'], a['path']
+    q = _split_query(a['query'], bare)
+    if form == 'resolvable':
+        return _parse_resolvable(call, registry, path, q)
     r = _route(registry, path)
     if call and r['mode'] != 'fn' and r['mode'] != 'write':
         raise TcxpError('"@" calls a function or performs a write, and ' + registry + '/' + path + ' is neither', 'call')
 
     items: Dict[str, List[Node]] = {}
     bindings: Dict[str, Node] = {}
-    meta: List[List[Any]] = []
-    for k, v in _split_pairs(query):
-        if meta and k[:1] != '~':
-            raise TcxpError('Meta keys (~) must come last; "' + k + '" appears after ~' + meta[-1][0], k)
-        if k[:1] == '~':
-            name = k[1:]
-            if not _NAME_RE.fullmatch(name):
-                raise TcxpError('Bad meta key "' + k + '"', k)
-            if any(m[0] == name for m in meta):
-                raise TcxpError('Meta key ' + k + ' appears twice', k)
-            meta.append([name, _parse_meta_value(v, name)])
-            continue
-        if k[:1] == '$':
-            name = k[1:]
-            if not _NAME_RE.fullmatch(name):
-                raise TcxpError('Bad variable name "' + k + '"', k)
-            if name in bindings:
-                raise TcxpError('Variable ' + k + ' is bound twice', k)
-            if v.startswith(CALL + SCHEME):
-                inner = parse_uri(v)
-                if inner['parsed']['mode'] != 'fn':
-                    raise TcxpError('Variable ' + k + ' can only be bound by an @ call to a function, not by a write', k)
-                bindings[name] = {'kind': 'call', 'tree': inner}
-            else:
-                vals = _parse_expr_list(v, k)
-                if len(vals) != 1 or vals[0]['kind'] != 'value':
-                    raise TcxpError('Variable ' + k + ' must be bound to one literal value or an @!tcxp:/ call', k)
-                bindings[name] = vals[0]
-            continue
+    for k, v in q['data']:
         mode = r['mode']
         if mode == 'sql':
             if k not in CLAUSES:
                 raise TcxpError('Unknown key "' + k + '". Clause keys are ' + ', '.join(CLAUSE_ORDER) +
-                                '; variables start with $, meta with ~.', k)
+                                '; variables start with $, and the context is ~context.', k)
             if k in items and not CLAUSES[k].get('repeat'):
                 raise TcxpError('Clause "' + k + '" appears twice', k)
             lst = _parse_expr_list(v, k, SELECT_OPS)
@@ -401,7 +660,7 @@ def parse_uri(input: Optional[str]) -> Tree:
             wc = WRITE_CLAUSES[r['op']]
             if k not in wc:
                 raise TcxpError('Unknown key "' + k + '" for sql/' + r['op'] + '. Keys are ' + ', '.join(WRITE_ORDER[r['op']]) +
-                                '; variables start with $, meta with ~.', k)
+                                '; variables start with $, and the context is ~context.', k)
             if k in items:
                 raise TcxpError('Key "' + k + '" appears twice', k)
             lst = _parse_expr_list(v, k)
@@ -435,7 +694,7 @@ def parse_uri(input: Optional[str]) -> Tree:
             items[k] = lst
         elif mode == 'math':
             if k != 'expr':
-                raise TcxpError('math/eval takes one key, expr= (plus $variables and ~meta)', k)
+                raise TcxpError('math/eval takes one key, expr= (plus $variables and ~context)', k)
             if 'expr' in items:
                 raise TcxpError('expr= appears twice', k)
             lst = _parse_expr_list(v, k, MATH_OPS)
@@ -454,7 +713,9 @@ def parse_uri(input: Optional[str]) -> Tree:
                 raise TcxpError('Parameter "' + k + '" expects a number', k)
             items[k] = [{'kind': 'value', 'value': value, 'type': decl['type']}]
         else:
-            raise TcxpError('A note address takes no keys other than ~meta', k)
+            raise TcxpError('A note address takes no data keys (only $variables and ~context)', k)
+    for k, v in q['binds']:
+        _parse_binding(bindings, k, v)
     if r['mode'] == 'sql':
         if 'from' not in items:
             raise TcxpError('A select needs from=', 'from')
@@ -468,8 +729,8 @@ def parse_uri(input: Optional[str]) -> Tree:
         for k in {'insert': ['into', 'cols', 'values'], 'update': ['table', 'set'], 'delete': ['from']}[r['op']]:
             if k not in items:
                 raise TcxpError('A' + (' ' if r['op'] == 'delete' else 'n ') + r['op'] + ' needs ' + k + '=', k)
-    return _build_tree({'call': call, 'registry': registry, 'path': path, 'mode': r['mode'], 'op': r.get('op'), 'fn': r.get('fn'),
-                        'note': r.get('text'), 'items': items, 'bindings': bindings, 'meta': meta})
+    return _build_tree({'call': call, 'form': form, 'registry': registry, 'path': path, 'mode': r['mode'], 'op': r.get('op'),
+                        'fn': r.get('fn'), 'note': r.get('text'), 'items': items, 'bindings': bindings, 'context': q['context']})
 
 
 # ---------------------------------------------------------------- tree + type inference
@@ -589,21 +850,6 @@ def _build_tree(parsed: Dict[str, Any]) -> Tree:
     else:
         root = {'kind': 'reference', 'name': parsed['registry'] + '/' + parsed['path'], 'role': 'note', 'type': 'text'}
 
-    # ~intent rows (v0.2): a row's "require" names a variable that must be bound before anything runs, even
-    # one the query never uses. Such a variable gets its own slot beside the query tree (tree['intentSlots']).
-    intent_meta = next((m for m in parsed['meta'] if m[0] == 'intent'), None)
-    required = _read_intent(intent_meta[1] if intent_meta else _UNDEFINED, diagnostics)
-    required_by: Dict[str, List[Dict[str, Any]]] = {}
-    for r in required:
-        required_by.setdefault(r['name'], []).append(r)
-    intent_slots: List[Node] = []
-    for name in required_by:
-        if name in slots_seen:
-            continue
-        intent_slots.append({'kind': 'slot', 'name': name, 'children': [],
-                             'requiredBy': [r['row'] for r in required if r['name'] == name]})
-        slots_seen.append(name)
-
     # attach bound values (or nested calls) to variables; unbound variables are gaps
     all_slots: List[Node] = []
 
@@ -613,7 +859,6 @@ def _build_tree(parsed: Dict[str, Any]) -> Tree:
         for c in _children(n):
             collect(c)
     collect(root)
-    all_slots.extend(intent_slots)
     for s in all_slots:
         b = bindings.get(s['name'])
         if not b:
@@ -635,22 +880,13 @@ def _build_tree(parsed: Dict[str, Any]) -> Tree:
                 d['msg'] = '$' + s['name'] + ' expects ' + to_string(base_type(s['type'])) + ' but is bound to a ' + b['type'] + ' value'
                 diagnostics.append(d)
     for name in slots_seen:
-        if name in bindings:
-            continue
-        rows = required_by.get(name)
-        if rows:
-            msg = ('$' + name + ' is a gap: ' + ' and '.join('intent row ' + str(r['row'] + 1) + (' (' + r['role'] + ')' if r['role'] else '')
-                                                         for r in rows) +
-                   ' require' + ('s' if len(rows) == 1 else '') + ' it, so this halts. ' + rows[0]['text'])
-        else:
-            msg = '$' + name + ' is a gap: no value is bound, so this cannot run'
-        diagnostics.append({'level': 'gap', 'msg': msg})
+        if name not in bindings:
+            diagnostics.append({'level': 'gap', 'msg': '$' + name + ' is a gap: no value is bound, so this halts'})
     for k in bindings:
         if k not in slots_seen:
             diagnostics.append({'level': 'warn', 'msg': '$' + k + ' is bound but never used'})
 
-    tree: Tree = {'root': root, 'parsed': parsed, 'slots': slots_seen, 'diagnostics': diagnostics,
-                  'intentSlots': intent_slots, 'required': required}
+    tree: Tree = {'root': root, 'parsed': parsed, 'slots': slots_seen, 'diagnostics': diagnostics}
     tree['gaps'] = _gaps_of(tree)
     tree['spikes'] = _read_spikes(tree)
     for sp in tree['spikes']:
@@ -720,48 +956,6 @@ def _gaps_of(tree: Tree) -> List[str]:
         for c in _children(n):
             walk(c)
     walk(tree['root'])
-    for s in tree.get('intentSlots') or []:
-        walk(s)
-    return out
-
-
-# ~intent: a string (legacy: one user row, no requirements) or an array of flat rows
-# {role, text, require: "$v" | ["$a","$b"], if_empty: "HALT"}. The protocol has three states, HALT, ASK and ACT;
-# v0.2 implements HALT only. ASK and ACT are reserved: writing one is an error, never a silent HALT.
-IF_EMPTY_RESERVED = ['ASK', 'ACT']
-_UNDEFINED = object()
-_REQ_RE = re.compile(r'\$[A-Za-z_][A-Za-z0-9_]*')
-
-
-def _read_intent(v: Any, diagnostics: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    if v is _UNDEFINED or isinstance(v, str) or (isinstance(v, (int, float)) and not isinstance(v, bool)):
-        return []
-    rows = v if isinstance(v, list) else [v]
-    out: List[Dict[str, Any]] = []
-    for i, row in enumerate(rows):
-        def bad(msg: str, i: int = i) -> None:
-            diagnostics.append({'level': 'error', 'msg': '~intent row ' + str(i + 1) + ': ' + msg})
-        if not truthy(row) or not isinstance(row, dict):
-            bad('each row is a JSON object like {"role":"user","text":"…"}')
-            continue
-        if row.get('require') is None:
-            if 'if_empty' in row:
-                bad('if_empty needs require')
-            continue
-        names = row['require'] if isinstance(row['require'], list) else [row['require']]
-        mode = row['if_empty'] if 'if_empty' in row else 'HALT'
-        if isinstance(mode, str) and mode in IF_EMPTY_RESERVED:
-            bad(mode + ' is reserved for a future version; v0.2 supports HALT only')
-            continue
-        if mode != 'HALT' or not isinstance(mode, str):
-            bad('if_empty must be "HALT" (or omitted, which means HALT), not ' + stringify(mode))
-            continue
-        for n in names:
-            if not isinstance(n, str) or not _REQ_RE.fullmatch(n):
-                bad('require names variables like "$tax_year", not ' + stringify(n))
-                continue
-            out.append({'name': n[1:], 'row': i, 'mode': mode, 'role': row['role'] if isinstance(row.get('role'), str) else None,
-                        'text': row['text'] if isinstance(row.get('text'), str) else ''})
     return out
 
 
@@ -790,11 +984,18 @@ def resolve_pointer(tree: Tree, ptr: Any) -> List[Node]:
             for c in _children(n):
                 walk(c)
         walk(tree['root'])
-        for s in tree.get('intentSlots') or []:
-            walk(s)
         if segs:
             return [x for x in (_descend(s['children'], segs) for s in starts) if x]
         return starts
+    if key == '~context':
+        c = tree['parsed']['context']
+        if not segs or segs[0] not in CONTEXT_KEYS:
+            return []
+        if len(segs) == 1:
+            return [c[segs[0]]]
+        if len(segs) > 2 or not re.fullmatch(r'[0-9]+', segs[1]) or int(segs[1]) >= len(c[segs[0]]):
+            return []
+        return [c[segs[0]][int(segs[1])]]
     lst = tree['parsed']['items'].get(key)
     if not lst:
         return []
@@ -822,7 +1023,7 @@ def _resolve_note(addr: Any) -> Optional[str]:
     if not isinstance(addr, str) or not addr.startswith(SCHEME):
         return None
     try:
-        t = parse_uri(addr)
+        t = _parse_address(addr, True)
         return t['parsed']['note'] if t['parsed']['mode'] == 'note' else None
     except Exception:
         return None
@@ -833,15 +1034,13 @@ def _prop(row: Any, key: str) -> Any:
 
 
 def _read_spikes(tree: Tree) -> List[Dict[str, Any]]:
-    m = next((x for x in tree['parsed']['meta'] if x[0] == 'spikes'), None)
-    if not m:
-        return []
-    rows = m[1] if isinstance(m[1], list) else [m[1]]
+    # Spike rows live in ~context.observe and are recognised by their "on" field. A spike has no id: features refer
+    # to it by its position among the spike rows (labelled s1, s2, … for display only).
+    rows = [r for r in tree['parsed']['context']['observe'] if _is_row(r) and 'on' in r]
     out = []
     for i, row in enumerate(rows):
         problems: List[str] = []
-        rid = _prop(row, 'id')
-        sid = to_string(rid) if truthy(row) and truthy(rid) else 's' + str(i + 1)
+        sid = 's' + str(i + 1)
         ron = _prop(row, 'on')
         on = (ron if isinstance(ron, list) else [ron]) if truthy(row) and truthy(ron) else []
         targets = [{'ptr': p, 'nodes': resolve_pointer(tree, p)} for p in on]
@@ -872,8 +1071,9 @@ def _read_spikes(tree: Tree) -> List[Dict[str, Any]]:
 _nid = 0
 
 
-def serialize(tree: Tree, meta: bool = True) -> Dict[str, Any]:
-    """Canonical form: ``{'uri', 'tokens'}``. ``meta=False`` drops ~meta keys (that string is the identity)."""
+def serialize(tree: Tree, context: bool = True) -> Dict[str, Any]:
+    """Canonical form: ``{'uri', 'tokens'}``. ``context=False`` drops ~context: that string is the identity of the
+    state (and the bare form used for references)."""
     parsed = tree['parsed']
     toks: List[Dict[str, Any]] = []
 
@@ -913,10 +1113,10 @@ def serialize(tree: Tree, meta: bool = True) -> Dict[str, Any]:
 
     if parsed['call']:
         push('@', 'call', tree['root'])
-    push('!tcxp:/', 'scheme')
+    push(RESOLVABLE if parsed.get('form') == 'resolvable' else SCHEME, 'scheme')
     push(parsed['registry'], 'registry')
     mode = parsed['mode']
-    push('/' + parsed['path'], 'path', tree['root']['children'][0] if mode == 'fn' else tree['root'] if mode in ('note', 'sql', 'write') else None)
+    push('/' + parsed['path'], 'path', tree['root']['children'][0] if mode == 'fn' else tree['root'] if mode in ('note', 'resolvable', 'sql', 'write') else None)
     first = [True]
 
     def sep() -> None:
@@ -960,6 +1160,12 @@ def serialize(tree: Tree, meta: bool = True) -> Dict[str, Any]:
         push('expr', 'key')
         push('=', 'punct')
         ex(parsed['items']['expr'][0])
+    elif mode == 'resolvable':
+        for k, lst in parsed['items'].items():
+            sep()
+            push(_enc_literal(k), 'key')
+            push('=', 'punct')
+            push(_enc_literal(to_string(lst[0]['value'])), 'value', lst[0])
     elif mode == 'fn':
         for p in parsed['fn']['params']:
             slot = parsed['items'][p['name']][0]
@@ -980,17 +1186,16 @@ def serialize(tree: Tree, meta: bool = True) -> Dict[str, Any]:
         push('$' + name, 'slotkey', slot)
         push('=', 'punct')
         if b['kind'] == 'call':
-            inner = serialize(b['tree'], meta=False)
+            inner = serialize(b['tree'], context=False)
             for t in inner['tokens']:
                 toks.append(dict(t, text=t['text'].replace('%', '%25').replace('&', '%26').replace('#', '%23')))
         else:
             push(val_text(b), 'value', slot['children'][0] if slot else None)
-    if meta:
-        for name, v in parsed['meta']:
-            sep()
-            push('~' + name, 'metakey')
-            push('=', 'punct')
-            push(_meta_text(v), 'meta')
+    if context:
+        sep()
+        push('~context', 'contextkey')
+        push('=', 'punct')
+        push(_context_text(parsed['context']), 'context')
     return {'uri': ''.join(t['text'] for t in toks), 'tokens': toks}
 
 
@@ -1006,18 +1211,66 @@ def find_slot(n: Node, name: str) -> Optional[Node]:
 
 
 def identity(tree: Tree) -> str:
-    """The canonical form without ~meta keys: two states with equal identity are the same decision state."""
-    return serialize(tree, meta=False)['uri']
+    """The address with ~context removed: two states with equal identity are the same decision state."""
+    return serialize(tree, context=False)['uri']
 
 
-def result_key(tree: Tree) -> str:
-    """Key for a stored result: the identity, plus what the ~intent rows require (intent rows never change
-    identity, but they decide whether a state runs). With no requirements it is the identity."""
-    req = tree.get('required') or []
-    if not req:
-        return identity(tree)
-    names = sorted(set(r['name'] for r in req), key=u16)
-    return identity(tree) + ' ~requires ' + stringify(names)
+def full_address(reference: str, context: Optional[Dict[str, Any]] = None) -> str:
+    """A full address from a bare reference: the reference plus ~context (empty unless given)."""
+    t = _parse_address(reference, True)
+    c = _empty_context() if context is None else _read_context(stringify(context))
+    return serialize(dict(t, parsed=dict(t['parsed'], context=c)))['uri']
+
+
+# ---------------------------------------------------------------- fingerprints
+# fingerprint(full_address): SHA-256 (lowercase hex) of the full canonical address, context included. Full addresses
+# live in the registry named by their first segment, so a chain of pulse parents can be followed back exactly.
+def _sha256_hex(text: str) -> str:
+    # UTF-8 as TextEncoder writes it: a lone surrogate becomes U+FFFD
+    text = re.sub('[\ud800-\udfff]', '\ufffd', from_u16(text))
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def fingerprint(full: str) -> str:
+    """SHA-256 (64 lowercase hex characters) of the full canonical address, context included."""
+    return _sha256_hex(serialize(parse_uri(full))['uri'])
+
+
+def store_address(full: str) -> str:
+    """Keep a full address in its registry (named by its first segment) and return its fingerprint.
+    Storing it again is a no-op; a registry that does not exist is an error (``unknown-registry``)."""
+    t = parse_uri(full)
+    canon = serialize(t)['uri']
+    fp = _sha256_hex(canon)
+    registry = t['parsed']['registry']
+    reg = REGISTRIES.get(registry)
+    if not reg:
+        raise TcxpError('Registry ' + stringify(registry) + ' does not exist; the address cannot be stored', 'store', 'unknown-registry')
+    lst = reg.setdefault('addresses', [])
+    if not any(e['fingerprint'] == fp for e in lst):
+        lst.append({'fingerprint': fp, 'address': canon})
+    return fp
+
+
+def lookup_address(fp: str) -> Optional[str]:
+    """The full address stored under a fingerprint, or None."""
+    for reg in REGISTRIES.values():
+        for e in reg.get('addresses') or []:
+            if e['fingerprint'] == fp:
+                address: str = e['address']
+                return address
+    return None
+
+
+def list_addresses(registry: Optional[str] = None) -> List[Dict[str, str]]:
+    """Stored addresses in order: one registry's, or every registry's."""
+    regs = list(REGISTRIES.keys()) if registry is None else [registry]
+    out: List[Dict[str, str]] = []
+    for r in regs:
+        reg = REGISTRIES.get(r)
+        if reg and 'addresses' in reg:
+            out.extend({'fingerprint': e['fingerprint'], 'address': e['address']} for e in reg['addresses'])
+    return out
 
 
 _STRICT_SAFE = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!$&'()*+,;=:@/?%")
@@ -1213,7 +1466,7 @@ def to_math(tree: Tree, written: bool = False) -> Optional[str]:
 
 # ---------------------------------------------------------------- JSON fiber
 def to_json(tree: Tree) -> Dict[str, Any]:
-    """The tree as a JSON document: address (identity), profile, cleaned tree, gaps and meta."""
+    """The tree as a JSON document: address (identity), profile, cleaned tree, gaps and context."""
     def clean(n: Node) -> Dict[str, Any]:
         o: Dict[str, Any] = {'kind': n['kind']}
         if n['kind'] == 'operator':
@@ -1234,13 +1487,13 @@ def to_json(tree: Tree) -> Dict[str, Any]:
             o['children'] = [clean(c) for c in n['children']]
         return o
     p = tree['parsed']
-    meta: Dict[str, Any] = {}
-    for k, v in p['meta']:
-        meta[k] = v
-    out = {'address': identity(tree), 'call': p['call'], 'registry': p['registry'], 'path': p['path'],
-           'profile': p['mode'], 'tree': clean(tree['root']), 'gaps': tree['gaps'], 'meta': meta}
-    if tree.get('intentSlots'):
-        out['requires'] = [clean(n) for n in tree['intentSlots']]
+    out: Dict[str, Any] = {'address': identity(tree), 'call': p['call']}
+    if p.get('form') == 'resolvable':
+        out['form'] = 'resolvable'
+    out.update({'registry': p['registry'], 'path': p['path'], 'profile': p['mode'], 'tree': clean(tree['root']),
+                'gaps': tree['gaps'], 'context': p['context']})
+    if p['mode'] == 'resolvable' and p['items']:
+        out['data'] = [[k, v[0]['value']] for k, v in p['items'].items()]
     # bindings for variables nothing uses (kept so from_json loses nothing)
     extra = [clean({'kind': 'slot', 'name': k, 'children': [b['tree']['root'] if b['kind'] == 'call' else b]})
              for k, b in p['bindings'].items() if k not in tree['slots']]
@@ -1251,7 +1504,7 @@ def to_json(tree: Tree) -> Dict[str, Any]:
 
 # ---------------------------------------------------------------- executor
 def execute(tree: Tree, store: Optional[Dict[str, Any]] = None, preview: bool = False) -> Dict[str, Any]:
-    """Run the tree. A gap always halts: nothing runs or writes while any variable is unbound.
+    """Run the tree. An unbound variable halts: nothing runs or writes while any variable is unbound.
 
     ``store`` is the data to read and write (default: this session's store, see ``new_store``).
     A write address runs only with ``@``; without it, or with ``preview=True``, it is described, not applied.
@@ -1262,11 +1515,8 @@ def execute(tree: Tree, store: Optional[Dict[str, Any]] = None, preview: bool = 
     if err:
         raise TcxpError(err['msg'], None, err.get('code'))
     if tree['gaps']:
-        res: Dict[str, Any] = {'kind': 'halt', 'gaps': tree['gaps']}
-        rows = [r for r in (tree.get('required') or []) if r['name'] in tree['gaps']]
-        if rows:
-            res['requiredBy'] = [{'var': r['name'], 'row': r['row'], 'role': r['role'], 'text': r['text']} for r in rows]
-        return res
+        # The one halt rule: an unbound variable halts, wherever an expression has one. Nothing runs or writes.
+        return {'kind': 'halt', 'gaps': tree['gaps']}
     return _execute_ready(tree, store, preview)
 
 
@@ -1274,6 +1524,13 @@ def _execute_ready(tree: Tree, store: Optional[Dict[str, Any]], preview: bool) -
     p = tree['parsed']
     if p['mode'] == 'note':
         return {'kind': 'note', 'text': p['note']}
+    # Reading a resolvable address shows where its entry points. It never fetches; only resolve() does.
+    if p['mode'] == 'resolvable':
+        if p['call']:
+            raise _not_supported_call()
+        entry = RESOLVABLE + p['registry'] + '/' + p['path']   # the registry entry: the part before "?"
+        e = _lookup_resolvable(entry)
+        return {'kind': 'resolvable', 'address': entry, 'registered': bool(e), 'location': e['location'] if e else None}
     if p['mode'] == 'fn':
         return {'kind': 'call', 'value': _invoke(tree), 'returns': p['fn']['returns']} if p['call'] else {'kind': 'address'}
     vals = _bound_values(tree)['vals']
@@ -1629,16 +1886,17 @@ def _execute_sql(tree: Tree, vals: Dict[str, Any], store: Dict[str, Any]) -> Dic
 # ---------------------------------------------------------------- pulse
 def with_pulse(tree: Tree, step: Any, at: Optional[str] = None, debounce: Optional[int] = None, parent: Optional[str] = None,
                extra: Optional[Dict[str, Any]] = None) -> str:
-    """The canonical address with one ``~pulse`` row stamped first among the meta keys.
+    """The canonical address with a new pulse row first in ``~context.trace`` (it replaces any earlier pulse row;
+    other trace rows are kept).
 
-    ``parent`` is the identity of the previous committed state (None for the first), so pulses form a chain.
+    ``parent`` is the fingerprint of the previous committed full address (None for the first), so pulses form a chain.
     ``extra`` adds fields to the row, e.g. ``{'undo': [inverse addresses]}`` for an executed write.
     """
-    meta = [m for m in tree['parsed']['meta'] if m[0] != 'pulse']
-    meta.insert(0, ['pulse', [{'step': step, 'at': at if truthy(at) else now_iso(),
-                               'debounce_ms': DEBOUNCE_MS if debounce is None else debounce,
-                               'parent': parent if truthy(parent) else None, **(extra or {})}]])
-    t = dict(tree, parsed=dict(tree['parsed'], meta=meta))
+    c = tree['parsed']['context']
+    row = {'step': step, 'at': at if truthy(at) else now_iso(), 'debounce_ms': DEBOUNCE_MS if debounce is None else debounce,
+           'parent': parent if truthy(parent) else None, **(extra or {})}
+    ctx = dict(c, trace=[row] + [r for r in c['trace'] if not (_is_row(r) and 'step' in r)])
+    t = dict(tree, parsed=dict(tree['parsed'], context=ctx))
     return serialize(t)['uri']
 
 
@@ -1697,9 +1955,8 @@ class FilterGenerator:
         self.count += 1
         r = self.rand()
         base = self.sql() if r < 0.6 else self.math() if r < 0.85 else self.call()
-        tree = parse_uri(base)
-        meta = self.meta(tree)
-        return base + ('&' if '?' in base else '?') + '&'.join(meta) if meta else base
+        tree = _parse_address(base, True)
+        return base + ('&' if '?' in base else '?') + '~context=' + _context_text(self.context(tree))
 
     def lit(self, v: Any, fam: Any) -> str:
         if fam == 'number':
@@ -1709,7 +1966,7 @@ class FilterGenerator:
         return "'" + _enc_literal(to_string(v).replace("'", "''")) + "'"
 
     def with_bindings(self, uri_no_bind: str, binds: Dict[str, str]) -> str:
-        tree = parse_uri(uri_no_bind)
+        tree = _parse_address(uri_no_bind, True)
         pairs = ['$' + s + '=' + binds[s] for s in tree['slots'] if s in binds]
         return uri_no_bind + '&' + '&'.join(pairs) if pairs else uri_no_bind
 
@@ -1999,9 +2256,9 @@ class FilterGenerator:
             uri = 'delete?from=' + t['name'] + '&where=' + where()
             uri += returning()
         base = '!tcxp:/' + reg_name + '/sql/' + uri
-        tree = parse_uri(base)
+        tree = _parse_address(base, True)
         pairs = ['$' + sl + '=' + binds[sl] for sl in tree['slots'] if sl in binds]
-        return serialize(parse_uri(base + '&' + '&'.join(pairs) if pairs else base))['uri']
+        return serialize(_parse_address(base + '&' + '&'.join(pairs) if pairs else base, True))['uri']   # a full address, empty context
 
     def random_pointer(self, tree: Tree) -> Optional[str]:
         if tree['slots'] and self.chance(0.3):
@@ -2020,38 +2277,38 @@ class FilterGenerator:
             node = node['children'][i]
         return '/'.join(str(x) for x in path)
 
-    def meta(self, tree: Tree) -> List[str]:
-        parts: List[str] = []
+    def context(self, tree: Tree) -> Dict[str, List[Any]]:
+        """The context, from the same random draws as v0.1's separate keys: a pulse row (trace), an intent row,
+        spike rows, an event row and an outcome row (observe, in that order)."""
+        c = _empty_context()
         notes = ['!tcxp:/' + r + '/' + n for r in READ_REGISTRIES for n in REGISTRIES[r]['notes']]
         if self.chance(0.6):
             step = 1 + self.int(500)
             d, h, mi, s, ms = self.int(28), self.int(24), self.int(60), self.int(60), self.int(1000)
-            at = iso_string(utc_ms(2026, 9, 1 + d, h, mi, s, ms))
-            parts.append('~pulse=' + _meta_text([{'step': step, 'at': at, 'debounce_ms': DEBOUNCE_MS}]))
+            c['trace'].append({'step': step, 'at': iso_string(utc_ms(2026, 9, 1 + d, h, mi, s, ms)), 'debounce_ms': DEBOUNCE_MS})
         if self.chance(0.5):
-            parts.append('~intent=' + _meta_text(self.pick(_PHRASES)))
+            c['intent'].append({'role': 'user', 'text': self.pick(_PHRASES)})
         if self.chance(0.5):
             rows = []
             n = 1 + self.int(2)
-            for i in range(n):
+            for _ in range(n):
                 ptr = self.random_pointer(tree)
                 if not ptr:
                     break
-                row: Dict[str, Any] = {'id': 's' + str(i + 1), 'on': [ptr]}
+                row: Dict[str, Any] = {'on': [ptr]}
                 for f in FACETS:
                     row[f] = (self.pick(notes) if self.chance(0.8) else 'Inline note for ' + f) if self.chance(0.5) else None
                 rows.append(row)
-            if rows:
-                parts.append('~spikes=' + _meta_text(rows))
+            c['observe'].extend(rows)
         if self.chance(0.2):
             frm = self.pick(['agent:planner', 'human:analyst', 'sensor:hull-07'])
             to = self.pick(['human:captain', 'agent:auditor', 'human:cpa'])
             ch = self.pick(['chat', 'email', 'telemetry'])
-            parts.append('~observe=' + _meta_text([{'from': frm, 'to': to, 'channel': ch}]))
+            c['observe'].append({'from': frm, 'to': to, 'channel': ch})
         if self.chance(0.2):
             amount = num_div(js_round(num_mul(num_sub(num_mul(self.rand(), 2000), 1000), 100)), 100)
-            parts.append('~outcome=' + _meta_text([{'amount': amount, 'currency': 'USD'}]))
-        return parts
+            c['observe'].append({'amount': amount, 'currency': 'USD'})
+        return c
 
     @staticmethod
     def filter(uri: str) -> Dict[str, Any]:
@@ -2059,20 +2316,19 @@ class FilterGenerator:
         res: Dict[str, bool] = {}
         tree: Optional[Tree] = None
         err: Optional[BaseException] = None
-        res['scheme'] = re.match(r'@?!tcxp:/', uri) is not None
+        res['scheme'] = re.match(r'@?(?:!tcxp:/(?!/)|tcxp://(?!/))', uri) is not None
         keys: List[str] = []
         try:
             q = uri.find('?')
             keys = [] if q < 0 else [p[0] for p in _split_pairs(uri[q + 1:])]
         except Exception as e:
             err = e
-        first_meta = next((i for i, k in enumerate(keys) if k[:1] == '~'), -1)
-        res['meta-last'] = first_meta < 0 or all(k[:1] == '~' for k in keys[first_meta:])
+        res['context-last'] = len(keys) > 0 and keys[-1] == '~context' and sum(1 for k in keys if k[:1] == '~') == 1
         try:
             tree = parse_uri(uri)
         except Exception as e:
             err = e
-        res['call-target'] = not uri.startswith('@') or bool(tree and tree['parsed']['mode'] in ('fn', 'write'))
+        res['call-target'] = not uri.startswith('@') or bool(tree and tree['parsed']['mode'] in ('fn', 'write', 'resolvable'))
         res['grammar'] = bool(tree) and not any(d['level'] == 'error' for d in tree['diagnostics'])  # type: ignore[index]
         res['canonical'] = bool(tree) and serialize(tree)['uri'] == uri  # type: ignore[arg-type]
         rules = [{'id': rid, 'name': name, 'pass': res[rid],
@@ -2491,7 +2747,7 @@ def _inverse_of(op: str, reg: str, t: Dict[str, Any], changes: List[Dict[str, An
                                  for i, n in enumerate(names)) + ')'
 
     def canon(s: str) -> str:
-        return serialize(parse_uri(s))['uri']
+        return serialize(_parse_address(s, True), context=False)['uri']   # a bare reference
     if op == 'insert':
         rows = [c['after'] for c in changes]
         if pk >= 0 and len(rows) > 1:
@@ -2583,6 +2839,8 @@ def _allowed_ops_for(mode: str) -> Optional[set]:
 
 # Re-render one data key from a list of item nodes, as raw pairs (join= repeats, other keys are one pair).
 def _key_pairs(tree: Tree, key: str, lst: List[Node]) -> List[Dict[str, str]]:
+    if tree['parsed']['mode'] == 'resolvable':
+        return [{'k': key, 'raw': _enc_literal(key) + '=' + _enc_literal(to_string(n['value']))} for n in lst]
     if tree['parsed']['mode'] == 'fn':
         return [{'k': key, 'raw': key + '=' + _enc_literal(_js_text(n.get('value', _UNDEF_TEXT)))} for n in lst]
     if key == 'join':
@@ -2654,6 +2912,8 @@ def _apply_edit(uri: str, tree: Tree, op: Any, i: int) -> str:
         return v is _UNDEF_TEXT or v is None
 
     def parse1(text: str, key: str) -> List[Node]:
+        if tree['parsed']['mode'] == 'resolvable':
+            return [{'kind': 'value', 'value': text, 'type': 'text'}]   # kept as written, no meaning
         try:
             return _parse_expr_list(text, key, _allowed_ops_for(tree['parsed']['mode']))
         except TcxpError as e:
@@ -2670,7 +2930,7 @@ def _apply_edit(uri: str, tree: Tree, op: Any, i: int) -> str:
         var = get('var')
         if not truthy(var if var is not _UNDEF_TEXT else None) or not isinstance(var, str) or not _NAME_RE.fullmatch(var):
             fail('bind needs var, a variable name without $')
-        if var not in tree['slots'] and var not in _required_vars(tree):
+        if var not in tree['slots']:
             fail('this address has no variable $' + var)
         value = get('value')
         if missing(value) or to_string(value) == '':
@@ -2712,7 +2972,7 @@ def _apply_edit(uri: str, tree: Tree, op: Any, i: int) -> str:
         if key[:1] == '$':
             fail("replace works on data keys; to change a variable's value use bind")
         if key[:1] == '~':
-            fail('replace works on data keys; to change meta use meta')
+            fail('replace works on data keys; to change the context use the context op')
         lst = items.get(key)
         if not lst:
             fail('this address has no ' + key + '=')
@@ -2740,10 +3000,20 @@ def _apply_edit(uri: str, tree: Tree, op: Any, i: int) -> str:
             if not any(p['k'] == key for p in pairs):
                 fail(key + ' is not bound')
             return _join_pairs(head, [p for p in pairs if p['k'] != key])
+        if key == '~context':
+            c = dict(tree['parsed']['context'])
+            if not segs or segs[0] not in CONTEXT_KEYS:
+                fail('remove in the context takes /~context/<intent|observe|reason|decide|trace>[/<index>]')
+            if len(segs) == 1:
+                c[segs[0]] = []
+            else:
+                idx = to_number(segs[1])
+                if len(segs) > 2 or not is_integer(idx) or idx >= len(c[segs[0]]):
+                    fail('nothing at ' + _js_text(get('path')))
+                c[segs[0]] = [e for j, e in enumerate(c[segs[0]]) if j != idx]
+            return _set_context(head, pairs, c)
         if key[:1] == '~':
-            if not any(p['k'] == key for p in pairs):
-                fail('there is no ' + key)
-            return _join_pairs(head, [p for p in pairs if p['k'] != key])
+            fail('the only ~ key is ~context')
         lst = items.get(key)
         if not lst:
             fail('this address has no ' + key + '=')
@@ -2765,6 +3035,8 @@ def _apply_edit(uri: str, tree: Tree, op: Any, i: int) -> str:
         repl = parse1(_js_text(get('expr')), key)
         lst = items.get(key)
         mode = tree['parsed']['mode']
+        if mode == 'resolvable' and lst:
+            fail(key + '= is already set; use replace')
         cdef = CLAUSES.get(key) if mode == 'sql' else WRITE_CLAUSES[tree['parsed']['op']].get(key) if mode == 'write' else None
         listy = bool(cdef) and bool(cdef.get('list') or cdef.get('repeat'))  # type: ignore[union-attr]
         if lst and not listy:
@@ -2776,25 +3048,24 @@ def _apply_edit(uri: str, tree: Tree, op: Any, i: int) -> str:
         if not on or any(not resolve_pointer(tree, p) for p in on):
             fail('every pointer in on must resolve to a node; ' +
                  ', '.join('' if p is None else to_string(p) for p in on if not resolve_pointer(tree, p)) + ' does not')
-        m2 = next((x for x in tree['parsed']['meta'] if x[0] == 'spikes'), None)
-        rows = (list(m2[1]) if isinstance(m2[1], list) else [m2[1]]) if m2 else []
-        id_v = get('id')
-        sid = id_v if truthy(None if id_v is _UNDEF_TEXT else id_v) else 's' + str(len(rows) + 1)
-        if any(truthy(r) and isinstance(r, dict) and 'id' in r and _js_strict_eq(r['id'], sid) for r in rows):
-            fail('an annotation ' + to_string(sid) + ' already exists')
+        c = tree['parsed']['context']
+        if get('id') is not _UNDEF_TEXT:
+            fail('a spike row has no id; spikes are referred to by position')
 
         def facet(k: str) -> Any:
             v = get(k)
             return None if v is _UNDEF_TEXT else v
-        rows.append({'id': sid, 'on': on, 'meaning': facet('meaning'), 'structure': facet('structure'), 'environment': facet('environment')})
-        return _set_meta(head, pairs, 'spikes', rows)
-    if kind == 'meta':
+        row = {'on': on, 'meaning': facet('meaning'), 'structure': facet('structure'), 'environment': facet('environment')}
+        return _set_context(head, pairs, dict(c, observe=c['observe'] + [row]))
+    if kind == 'context':
         key = get('key')
-        if not truthy(None if key is _UNDEF_TEXT else key) or not isinstance(key, str) or not _NAME_RE.fullmatch(key):
-            fail('meta needs key, a name without ~')
+        if not isinstance(key, str) or key not in CONTEXT_KEYS:
+            fail('context needs key: intent, observe, reason, decide or trace')
         value = get('value')
-        return _set_meta(head, pairs, key, None if value is _UNDEF_TEXT else value)
-    raise _edit_error(i, op, 'unknown op. Use bind, unbind, param, replace, remove, add, annotate or meta')
+        if not missing(value) and not isinstance(value, list):
+            fail('context value is an array of rows and bare addresses (null for [])')
+        return _set_context(head, pairs, dict(tree['parsed']['context'], **{key: value if truthy(value if not missing(value) else None) else []}))
+    raise _edit_error(i, op, 'unknown op. Use bind, unbind, param, replace, remove, add, annotate or context')
 
 
 def _js_strict_eq(a: Any, b: Any) -> bool:
@@ -2807,38 +3078,23 @@ def _js_strict_eq(a: Any, b: Any) -> bool:
     return a is b
 
 
-def _set_meta(head: str, pairs: List[Dict[str, str]], key: str, value: Any) -> str:
-    rest = list(pairs)
-    at = next((i for i, p in enumerate(rest) if p['k'] == '~' + key), -1)
-    if value is None:
-        if at >= 0:
-            del rest[at]
-        return _join_pairs(head, rest)
-    pair = {'k': '~' + key, 'raw': '~' + key + '=' + _meta_text(value)}
-    if at >= 0:
-        rest[at] = pair
-    else:
-        rest.append(pair)
-    return _join_pairs(head, rest)
-
-
-# Variables a ~intent row requires; none in v0.1-style addresses.
-def _required_vars(tree: Tree) -> List[str]:
-    return [r['name'] for r in (tree.get('required') or [])]
+def _set_context(head: str, pairs: List[Dict[str, str]], c: Dict[str, List[Any]]) -> str:
+    return _join_pairs(head, [p for p in pairs if p['k'] != '~context'] + [{'k': '~context', 'raw': '~context=' + _context_text(c)}])
 
 
 def edit(uri: str, ops: Any, pulse: bool = True, at: Optional[str] = None) -> Dict[str, Any]:
-    """Apply edit operations (bind, unbind, param, replace, remove, add, annotate, meta) to an address.
+    """Apply edit operations (bind, unbind, param, replace, remove, add, annotate, context) to an address.
 
     Returns ``{'uri', 'tree'}``. It never returns an invalid address: a bad edit raises TcxpError with
-    code ``'edit'``. With ``pulse=True`` it stamps a ~pulse whose parent is the identity before the edit.
+    code ``'edit'``. With ``pulse=True`` it stamps a pulse row in ``~context.trace`` whose parent is the
+    fingerprint of the full address before the edit (stored, so ``lookup_address`` returns it).
     """
     if not isinstance(ops, list):
         ops = [ops]
     tree = parse_uri(uri)
-    before = identity(tree)
-    prev = next((m for m in tree['parsed']['meta'] if m[0] == 'pulse'), None)
     cur = serialize(tree)['uri']
+    before = cur
+    prev = _pulse_row_of(tree['parsed']['context'])
     for i, op in enumerate(ops):
         nxt = _apply_edit(cur, tree, op, i)
         try:
@@ -2850,9 +3106,8 @@ def edit(uri: str, ops: Any, pulse: bool = True, at: Optional[str] = None) -> Di
             raise _edit_error(i, op, 'the result would be invalid: ' + err['msg'])
         cur = serialize(tree)['uri']
     if pulse is not False:
-        p0 = prev[1][0] if prev and isinstance(prev[1], list) and prev[1] and truthy(prev[1][0]) else None
-        step = p0['step'] + 1 if isinstance(p0, dict) and is_integer(p0.get('step')) else 1
-        cur = with_pulse(tree, step, at, 0, before)
+        step = prev['step'] + 1 if prev is not None and is_integer(prev['step']) else 1
+        cur = with_pulse(tree, step, at, 0, store_address(before))
         tree = parse_uri(cur)
     f = FilterGenerator.filter(cur)
     if not f['ok']:
@@ -2896,10 +3151,8 @@ def query(uri: Any, selector: str) -> List[Dict[str, Any]]:
     arg = rest if sep else None
 
     def pick(test: Callable[[Node], bool]) -> List[Dict[str, Any]]:
-        return ([{'pointer': x['pointer'], 'kind': _node_kind_of(x['node']), 'label': _node_label(x['node'])}
-                 for x in _all_pointers(tree) if test(x['node'])] +
-                [{'pointer': '/$' + n['name'], 'kind': _node_kind_of(n), 'label': _node_label(n), 'source': 'intent'}
-                 for n in (tree.get('intentSlots') or []) if test(n)])
+        return [{'pointer': x['pointer'], 'kind': _node_kind_of(x['node']), 'label': _node_label(x['node'])}
+                for x in _all_pointers(tree) if test(x['node'])]
     if what == 'gaps':
         return (pick(lambda n: n['kind'] == 'slot' and not n.get('param') and not n['children']) +
                 (pick(lambda n: n['kind'] == 'slot' and bool(n.get('param')) and not n['children']) if tree['parsed']['mode'] == 'fn' else []))
@@ -2913,13 +3166,16 @@ def query(uri: Any, selector: str) -> List[Dict[str, Any]]:
         return [{'pointer': t['ptr'], 'kind': 'annotation', 'label': sp['id'] + ' · ' + sp['bits']}
                 for sp in tree['spikes'] for t in sp['targets'] if t['nodes']]
     if what == 'pointer':
+        if to_string(arg).startswith('/~context/'):
+            return [{'pointer': arg, 'kind': 'context', 'label': str(len(n)) + ' entries' if isinstance(n, list) else n if isinstance(n, str) else 'row'}
+                    for n in resolve_pointer(tree, arg)]
         return [{'pointer': arg, 'kind': _node_kind_of(n), 'label': _node_label(n)} for n in resolve_pointer(tree, arg)]
     raise TcxpError('Unknown selector "' + to_string(selector) + '". Use gaps, variables, references, references:<name>, operators:<op>, annotations or pointer:<path>', 'query')
 
 
 def from_json(j: Dict[str, Any]) -> Tree:
-    """The inverse of to_json: rebuild the address from the tree, profile and meta alone."""
-    head = (CALL if j.get('call') else '') + SCHEME + j['registry'] + '/' + j['path']
+    """The inverse of to_json: rebuild the address from the tree, profile and context alone."""
+    head = (CALL if j.get('call') else '') + (RESOLVABLE if j.get('form') == 'resolvable' else SCHEME) + j['registry'] + '/' + j['path']
     pairs: List[str] = []
     binds: List[str] = []
     seen: set = set()
@@ -2948,7 +3204,7 @@ def from_json(j: Dict[str, Any]) -> Tree:
         for c in n.get('children') or []:
             collect(c)
     # a function's parameter slots are keys, not $bindings
-    collect({'children': ([] if j['profile'] == 'fn' else [j['tree']]) + list(j.get('requires') or []) + list(j.get('extra_bindings') or [])})
+    collect({'children': ([] if j['profile'] == 'fn' else [j['tree']]) + list(j.get('extra_bindings') or [])})
     if j['profile'] in ('sql', 'write'):
         for c in j['tree'].get('children') or []:
             if c['op'].startswith('clause:'):
@@ -2961,9 +3217,10 @@ def from_json(j: Dict[str, Any]) -> Tree:
         for p in j['tree']['children'][1:]:
             if p.get('children'):
                 pairs.append(p['name'] + '=' + _enc_literal(to_string(p['children'][0]['value'])))
-    meta = j.get('meta') or {}
-    metas = ['~' + k + '=' + _meta_text(meta[k]) for k in object_keys(meta)]
-    alls = pairs + binds + metas
+    elif j['profile'] == 'resolvable':
+        for k, v in j.get('data') or []:
+            pairs.append(_enc_literal(k) + '=' + _enc_literal(to_string(v)))
+    alls = pairs + binds + ['~context=' + _context_text(j.get('context') or _empty_context())]
     return parse_uri(head + ('?' + '&'.join(alls) if alls else ''))
 
 
@@ -3069,3 +3326,5 @@ def register_csv(registry: str, table: str, csv_text: str, types: Optional[Dict[
 # client.demo and any other CSV-backed registry: built here exactly as tcxp.js builds them.
 for _reg, _table, _text, _types in _data.CSV_SOURCES:
     register_csv(_reg, _table, _text, _types)
+# Resolvable demo entries, in the same order as tcxp.js registers them.
+register_resolvable(copy.deepcopy(_data.RESOLVABLE_SOURCES))

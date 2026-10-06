@@ -297,7 +297,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "students",
         "title": "Students in a cohort",
         "intent": "Show me everyone in the fall 2026 cohort.",
-        "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'",
+        "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT * FROM students WHERE cohort = '2026-fall'",
     },
     {
@@ -305,7 +305,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "students",
         "title": "Top students by GPA",
         "intent": "Who are the top 5 students with at least a 3.5 GPA?",
-        "uri": "!tcxp:/school.demo/sql/select?cols=first_name,last_name,gpa&from=students&where=ge(gpa,$min_gpa)&order=desc(gpa)&limit=$top&$min_gpa=3.5&$top=5",
+        "uri": "!tcxp:/school.demo/sql/select?cols=first_name,last_name,gpa&from=students&where=ge(gpa,$min_gpa)&order=desc(gpa)&limit=$top&$min_gpa=3.5&$top=5&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT first_name, last_name, gpa FROM students WHERE gpa >= 3.5 ORDER BY gpa DESC LIMIT 5",
     },
     {
@@ -313,7 +313,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "students",
         "title": "Students who joined in a date window",
         "intent": "Who joined the platform during August 2026?",
-        "uri": "!tcxp:/school.demo/sql/select?cols=student_id,email,enrolled_on&from=students&where=between(enrolled_on,$start,$end)&order=asc(enrolled_on)&$start=date'2026-08-01'&$end=date'2026-08-31'",
+        "uri": "!tcxp:/school.demo/sql/select?cols=student_id,email,enrolled_on&from=students&where=between(enrolled_on,$start,$end)&order=asc(enrolled_on)&$start=date'2026-08-01'&$end=date'2026-08-31'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT student_id, email, enrolled_on FROM students WHERE enrolled_on BETWEEN DATE '2026-08-01' AND DATE '2026-08-31' ORDER BY enrolled_on ASC",
     },
     {
@@ -321,7 +321,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "submissions",
         "title": "Ungraded work since a date",
         "intent": "What has been submitted since September 15 that still has no grade?",
-        "uri": "!tcxp:/school.demo/sql/select?cols=*&from=submissions&where=and(ge(submitted_at,$since),isnull(score))&$since=date'2026-09-15'",
+        "uri": "!tcxp:/school.demo/sql/select?cols=*&from=submissions&where=and(ge(submitted_at,$since),isnull(score))&$since=date'2026-09-15'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT * FROM submissions WHERE submitted_at >= DATE '2026-09-15' AND score IS NULL",
     },
     {
@@ -329,7 +329,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "submissions",
         "title": "Average score per assignment",
         "intent": "For assignments with at least 3 submissions, what is the average score?",
-        "uri": "!tcxp:/school.demo/sql/select?cols=assignment_id,as(round(avg(score),1),avg_score),as(count(*),n)&from=submissions&group=assignment_id&having=ge(count(*),$min_n)&order=desc(avg_score)&$min_n=3",
+        "uri": "!tcxp:/school.demo/sql/select?cols=assignment_id,as(round(avg(score),1),avg_score),as(count(*),n)&from=submissions&group=assignment_id&having=ge(count(*),$min_n)&order=desc(avg_score)&$min_n=3&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT assignment_id, round(avg(score), 1) AS avg_score, count(*) AS n FROM submissions GROUP BY assignment_id HAVING count(*) >= 3 ORDER BY avg_score DESC",
     },
     {
@@ -337,7 +337,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "submissions",
         "title": "Late or resubmitted work scoring low",
         "intent": "Which late or resubmitted submissions scored under 70?",
-        "uri": "!tcxp:/school.demo/sql/select?cols=submission_id,student_id,score,status&from=submissions&where=and(in(status,'late','resubmitted'),lt(score,$threshold))&$threshold=70",
+        "uri": "!tcxp:/school.demo/sql/select?cols=submission_id,student_id,score,status&from=submissions&where=and(in(status,'late','resubmitted'),lt(score,$threshold))&$threshold=70&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT submission_id, student_id, score, status FROM submissions WHERE status IN ('late', 'resubmitted') AND score < 70",
     },
     {
@@ -345,7 +345,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "joins",
         "title": "Course roster (inner join)",
         "intent": "Who is enrolled in CS101?",
-        "uri": "!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'",
+        "uri": "!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT students.first_name, students.last_name, courses.title FROM students INNER JOIN enrollments ON enrollments.student_id = students.student_id INNER JOIN courses ON courses.course_id = enrollments.course_id WHERE courses.code = 'CS101'",
     },
     {
@@ -353,7 +353,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "joins",
         "title": "Students with no submissions (left join)",
         "intent": "Which students have never submitted anything?",
-        "uri": "!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)",
+        "uri": "!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT students.student_id, students.email FROM students LEFT JOIN submissions ON submissions.student_id = students.student_id WHERE submissions.submission_id IS NULL",
     },
     {
@@ -361,7 +361,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "joins",
         "title": "Courses and assignments without a partner (full outer join)",
         "intent": "Which courses have no assignments, and which assignments belong to no course?",
-        "uri": "!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))",
+        "uri": "!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT courses.code, assignments.title FROM courses FULL OUTER JOIN assignments ON assignments.course_id = courses.course_id WHERE courses.course_id IS NULL OR assignments.assignment_id IS NULL",
     },
     {
@@ -369,7 +369,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "composed",
         "title": "Active enrollment by department",
         "intent": "How many active enrollments does each department have?",
-        "uri": "!tcxp:/school.demo/sql/select?cols=courses.department,as(count(enrollments.enrollment_id),enrolled)&from=courses&join=left(enrollments,and(eq(enrollments.course_id,courses.course_id),eq(enrollments.status,$status)))&group=courses.department&order=desc(enrolled),asc(courses.department)&$status='active'",
+        "uri": "!tcxp:/school.demo/sql/select?cols=courses.department,as(count(enrollments.enrollment_id),enrolled)&from=courses&join=left(enrollments,and(eq(enrollments.course_id,courses.course_id),eq(enrollments.status,$status)))&group=courses.department&order=desc(enrolled),asc(courses.department)&$status='active'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT courses.department, count(enrollments.enrollment_id) AS enrolled FROM courses LEFT JOIN enrollments ON enrollments.course_id = courses.course_id AND enrollments.status = 'active' GROUP BY courses.department ORDER BY enrolled DESC, courses.department ASC",
     },
     {
@@ -377,7 +377,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "calls",
         "title": "Hello, world (call)",
         "intent": "Call the hello handler with do=world.",
-        "uri": "@!tcxp:/registry/hello?do=world",
+        "uri": "@!tcxp:/registry/hello?do=world&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
     {
@@ -385,7 +385,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "calls",
         "title": "Cohort bound by a call",
         "intent": "Show me everyone in the cohort that is open for enrollment right now.",
-        "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort",
+        "uri": "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT * FROM students WHERE cohort = '2026-fall'",
     },
     {
@@ -393,7 +393,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "math",
         "title": "2x + 3 = 9 with x unknown",
         "intent": "Is 2x + 3 = 9 true?",
-        "uri": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&~intent=Is 2x + 3 = 9 true?&~spikes=[{\"id\":\"s1\",\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}]",
+        "uri": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&~context={\"intent\":[{\"role\":\"user\",\"text\":\"Is 2x + 3 = 9 true?\"}],\"observe\":[{\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
     {
@@ -401,7 +401,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "math",
         "title": "2x + 3 = 9 with x = 3",
         "intent": "Is 2x + 3 = 9 true when x = 3?",
-        "uri": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3&~intent=Is 2x + 3 = 9 true when x = 3?&~spikes=[{\"id\":\"s1\",\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}]",
+        "uri": "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3&~context={\"intent\":[{\"role\":\"user\",\"text\":\"Is 2x + 3 = 9 true when x = 3?\"}],\"observe\":[{\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
     {
@@ -409,7 +409,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "math",
         "title": "Ice risk, sea unknown",
         "intent": "The water is 29 °F. Will the sea ice up?",
-        "uri": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&~intent=The water is 29 °F. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+        "uri": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&~context={\"intent\":[{\"role\":\"user\",\"text\":\"The water is 29 °F. Will the sea ice up?\"}],\"observe\":[{\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
     {
@@ -417,7 +417,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "math",
         "title": "Ice risk on the Atlantic route",
         "intent": "The water is 29 °F on the Atlantic route. Will the sea ice up?",
-        "uri": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=28.6&~intent=The water is 29 °F on the Atlantic route. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+        "uri": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=28.6&~context={\"intent\":[{\"role\":\"user\",\"text\":\"The water is 29 °F on the Atlantic route. Will the sea ice up?\"}],\"observe\":[{\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
     {
@@ -425,7 +425,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "math",
         "title": "Ice risk on the Baltic route",
         "intent": "The water is 29 °F on the Baltic route. Will the sea ice up?",
-        "uri": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=31.3&~intent=The water is 29 °F on the Baltic route. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]",
+        "uri": "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&$freezing_point=31.3&~context={\"intent\":[{\"role\":\"user\",\"text\":\"The water is 29 °F on the Baltic route. Will the sea ice up?\"}],\"observe\":[{\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
     {
@@ -433,7 +433,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "tax",
         "title": "US hours, tax year missing",
         "intent": "How many hours did our people work in the US?",
-        "uri": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&~intent=How many hours did our people work in the US?&~spikes=[{\"id\":\"s1\",\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}]",
+        "uri": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&~context={\"intent\":[{\"role\":\"user\",\"text\":\"How many hours did our people work in the US?\"}],\"observe\":[{\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
     {
@@ -441,7 +441,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "tax",
         "title": "US hours for tax year 2024",
         "intent": "How many hours did our people work in the US in tax year 2024?",
-        "uri": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&$tax_year=2024&~intent=How many hours did our people work in the US in tax year 2024?&~spikes=[{\"id\":\"s1\",\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}]",
+        "uri": "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&$tax_year=2024&~context={\"intent\":[{\"role\":\"user\",\"text\":\"How many hours did our people work in the US in tax year 2024?\"}],\"observe\":[{\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT sum(work_logs.hours) AS us_hours FROM work_logs WHERE work_logs.work_country = 'US' AND extract(year from work_logs.worked_on) = 2024",
     },
     {
@@ -449,7 +449,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "tax",
         "title": "US hours: calendar year vs fiscal year",
         "intent": "How do US hours split between calendar years and project fiscal years?",
-        "uri": "!tcxp:/firm.demo/sql/select?cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'",
+        "uri": "!tcxp:/firm.demo/sql/select?cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT extract(year from work_logs.worked_on) AS calendar_year, projects.fiscal_year, sum(work_logs.hours) AS us_hours FROM work_logs INNER JOIN projects ON projects.project_id = work_logs.project_id WHERE work_logs.work_country = 'US' GROUP BY extract(year from work_logs.worked_on), projects.fiscal_year ORDER BY calendar_year ASC, projects.fiscal_year ASC",
     },
     {
@@ -457,7 +457,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "writes",
         "title": "Add a course (insert one row)",
         "intent": "Add the new Data Visualization course, DS310, worth 3 credits.",
-        "uri": "!tcxp:/school.demo/sql/insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3",
+        "uri": "!tcxp:/school.demo/sql/insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "INSERT INTO courses (course_id, code, title, department, credits) VALUES (6, 'DS310', 'Data Visualization', 'DS', 3) RETURNING *",
     },
     {
@@ -465,7 +465,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "writes",
         "title": "Enroll a student in two courses (insert several rows)",
         "intent": "Enroll Hannah Weiss in CS101 and DS210 today.",
-        "uri": "!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,$student,1,$today,'active'),row(22,$student,3,$today,'active')&returning=enrollment_id,course_id&$student=5&$today=date'2026-10-04'",
+        "uri": "!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,$student,1,$today,'active'),row(22,$student,3,$today,'active')&returning=enrollment_id,course_id&$student=5&$today=date'2026-10-04'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 5, 1, DATE '2026-10-04', 'active'), (22, 5, 3, DATE '2026-10-04', 'active') RETURNING enrollment_id, course_id",
     },
     {
@@ -473,7 +473,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "writes",
         "title": "Record a new GPA (update with bound variables)",
         "intent": "Record Noah Kim's new GPA of 3.15.",
-        "uri": "!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8",
+        "uri": "!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "UPDATE students SET gpa = 3.15 WHERE student_id = 8 RETURNING student_id, first_name, gpa",
     },
     {
@@ -481,7 +481,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "writes",
         "title": "Move a student to the open cohort (update bound by a call)",
         "intent": "Move Priya Nair into the cohort that is open for enrollment now.",
-        "uri": "!tcxp:/school.demo/sql/update?table=students&set=assign(cohort,$cohort)&where=eq(student_id,3)&returning=student_id,cohort&$cohort=@!tcxp:/school.demo/fn/current_cohort",
+        "uri": "!tcxp:/school.demo/sql/update?table=students&set=assign(cohort,$cohort)&where=eq(student_id,3)&returning=student_id,cohort&$cohort=@!tcxp:/school.demo/fn/current_cohort&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "UPDATE students SET cohort = '2026-fall' WHERE student_id = 3 RETURNING student_id, cohort",
     },
     {
@@ -489,7 +489,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "writes",
         "title": "Delete low late submissions (delete with where)",
         "intent": "Delete the late submissions that scored under 60.",
-        "uri": "!tcxp:/school.demo/sql/delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60",
+        "uri": "!tcxp:/school.demo/sql/delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "DELETE FROM submissions WHERE status = 'late' AND score < 60 RETURNING submission_id, score",
     },
     {
@@ -497,7 +497,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "writes",
         "title": "Add half an hour to a work log (update with an expression)",
         "intent": "Add half an hour to Ana Ruiz's work log for May 20, 2024.",
-        "uri": "!tcxp:/firm.demo/sql/update?table=work_logs&set=assign(hours,add(hours,$extra))&where=eq(log_id,2)&returning=log_id,hours&$extra=0.5",
+        "uri": "!tcxp:/firm.demo/sql/update?table=work_logs&set=assign(hours,add(hours,$extra))&where=eq(log_id,2)&returning=log_id,hours&$extra=0.5&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "UPDATE work_logs SET hours = hours + 0.5 WHERE log_id = 2 RETURNING log_id, hours",
     },
     {
@@ -505,7 +505,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "writes",
         "title": "Clear every submission on purpose (where=true)",
         "intent": "Clear every submission. Yes, all of them.",
-        "uri": "!tcxp:/school.demo/sql/delete?from=submissions&where=true&returning=submission_id",
+        "uri": "!tcxp:/school.demo/sql/delete?from=submissions&where=true&returning=submission_id&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "DELETE FROM submissions WHERE true RETURNING submission_id",
     },
     {
@@ -513,7 +513,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "writes",
         "title": "Set a GPA, value missing (gap blocks the write)",
         "intent": "Set Maya Chen's GPA.",
-        "uri": "!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,1)",
+        "uri": "!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,1)&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
     {
@@ -521,7 +521,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "writes",
         "title": "Delete with no where (refused)",
         "intent": "Delete every submission.",
-        "uri": "!tcxp:/school.demo/sql/delete?from=submissions",
+        "uri": "!tcxp:/school.demo/sql/delete?from=submissions&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
     {
@@ -529,7 +529,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "writes",
         "title": "Enroll a student who does not exist (foreign key error)",
         "intent": "Enroll student 99 in CS101.",
-        "uri": "!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')",
+        "uri": "!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 99, 1, DATE '2026-10-04', 'active')",
     },
     {
@@ -537,7 +537,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "csv",
         "title": "US hours in the client CSV, tax year 2024",
         "intent": "What are the US hours worked in my client CSV in 2024?",
-        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024",
+        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024",
     },
     {
@@ -545,7 +545,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "csv",
         "title": "Hours per person in the client CSV",
         "intent": "How many hours did each person log, and where?",
-        "uri": "!tcxp:/client.demo/sql/select?cols=employee,work_country,as(sum(hours),total_hours),as(count(*),days)&from=client_hours&group=employee,work_country&order=asc(employee),asc(work_country)",
+        "uri": "!tcxp:/client.demo/sql/select?cols=employee,work_country,as(sum(hours),total_hours),as(count(*),days)&from=client_hours&group=employee,work_country&order=asc(employee),asc(work_country)&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT employee, work_country, sum(hours) AS total_hours, count(*) AS days FROM client_hours GROUP BY employee, work_country ORDER BY employee ASC, work_country ASC",
     },
     {
@@ -553,7 +553,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "csv",
         "title": "Add a day to the client CSV (write)",
         "intent": "Add a 6-hour US day for Ana Ruiz on 2025-10-01.",
-        "uri": "!tcxp:/client.demo/sql/insert?into=client_hours&cols=row_id,employee,date,hours,work_country&values=row(23,$who,$day,6,'US')&returning=*&$who='Ana Ruiz'&$day=date'2025-10-01'",
+        "uri": "!tcxp:/client.demo/sql/insert?into=client_hours&cols=row_id,employee,date,hours,work_country&values=row(23,$who,$day,6,'US')&returning=*&$who='Ana Ruiz'&$day=date'2025-10-01'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "INSERT INTO client_hours (row_id, employee, date, hours, work_country) VALUES (23, 'Ana Ruiz', DATE '2025-10-01', 6, 'US') RETURNING *",
     },
     {
@@ -561,7 +561,7 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "intent",
         "title": "US hours: halts until the tax year is stated",
         "intent": "What are the US hours worked in my client CSV?",
-        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&~intent=[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\",\"if_empty\":\"HALT\"}]",
+        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&~context={\"intent\":[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\",\"if_empty\":\"HALT\"}],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
     {
@@ -569,31 +569,15 @@ QUERIES: List[Dict[str, Any]] = [
         "group": "intent",
         "title": "US hours: tax year given, it runs",
         "intent": "What are the US hours worked in my client CSV? (2024)",
-        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024&~intent=[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\",\"if_empty\":\"HALT\"}]",
+        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024&~context={\"intent\":[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\",\"if_empty\":\"HALT\"}],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024",
     },
     {
-        "id": "intent-require-only",
-        "group": "intent",
-        "title": "Required even though the query never uses it",
-        "intent": "What are the US hours worked in my client CSV, all years?",
-        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=eq(work_country,'US')&~intent=[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\",\"if_empty\":\"HALT\"}]",
-        "ref": None,
-    },
-    {
-        "id": "intent-require-only-bound",
-        "group": "intent",
-        "title": "Required, bound, and the query runs unchanged",
-        "intent": "What are the US hours worked in my client CSV, all years? (tax year 2024 stated)",
-        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=eq(work_country,'US')&$tax_year=2024&~intent=[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\",\"if_empty\":\"HALT\"}]",
-        "ref": "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US'",
-    },
-    {
-        "id": "intent-halt-implied",
-        "group": "intent",
-        "title": "if_empty omitted: HALT is the default",
-        "intent": "What are the US hours worked in my client CSV?",
-        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=eq(work_country,'US')&~intent=[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\"}]",
+        "id": "resolvable-tax-year",
+        "group": "resolvable",
+        "title": "Resolvable entry: the tax-year rule",
+        "intent": "Where does tcxp://firm.demo/rules/tax-year point?",
+        "uri": "tcxp://firm.demo/rules/tax-year?~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}",
         "ref": None,
     },
 ]
@@ -609,6 +593,21 @@ CSV_SOURCES: List[List[Any]] = [
     ],
 ]
 
+RESOLVABLE_SOURCES: List[Dict[str, str]] = [
+    {
+        "address": "tcxp://firm.demo/rules/tax-year",
+        "location": "file:fixtures/firm-tax-year.md",
+    },
+    {
+        "address": "tcxp://firm.demo/env/fiscal-calendar",
+        "location": "file:fixtures/firm-fiscal-calendar.md",
+    },
+    {
+        "address": "tcxp://fleet.demo/env/sea-route",
+        "location": "file:fixtures/fleet-sea-route.md",
+    },
+]
+
 GROUPS: List[List[str]] = [
     ["students", "School · students table"],
     ["submissions", "School · submissions table"],
@@ -620,41 +619,42 @@ GROUPS: List[List[str]] = [
     ["writes", "Writes"],
     ["csv", "Client CSV"],
     ["intent", "Intent rows"],
+    ["resolvable", "Resolvable (tcxp://)"],
 ]
 
 COVERAGE: List[List[Any]] = [
-    ["Projection", "SELECT column list", "yes", "!tcxp:/school.demo/sql/select?cols=first_name,gpa&from=students"],
-    ["Projection", "SELECT *", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students"],
-    ["Projection", "Column alias (AS)", "yes", "!tcxp:/school.demo/sql/select?cols=as(gpa,grade)&from=students"],
-    ["Source", "FROM table", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=courses"],
-    ["Filter", "= <> < <= > >=", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=and(ge(gpa,3),ne(cohort,$c),lt(gpa,4))&$c='2025-fall'"],
-    ["Filter", "AND / OR / NOT", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=or(not(eq(cohort,'2026-fall')),gt(gpa,3.9))"],
-    ["Filter", "IN (list)", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=courses&where=in(department,'CS','DS')"],
-    ["Filter", "BETWEEN", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=between(gpa,3,3.5)"],
-    ["Filter", "LIKE / ILIKE", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=ilike(email,$pat)&$pat='%25chen%25'"],
-    ["Filter", "IS NULL / IS NOT NULL", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=assignments&where=notnull(course_id)"],
-    ["Expressions", "Arithmetic + - * /", "yes", "!tcxp:/school.demo/sql/select?cols=title,as(div(max_points,10),tenth)&from=assignments"],
-    ["Expressions", "Scalar functions (round, lower, upper, coalesce)", "yes", "!tcxp:/school.demo/sql/select?cols=upper(code),coalesce(due_on,date'2026-12-31')&from=courses&join=left(assignments,eq(assignments.course_id,courses.course_id))"],
-    ["Expressions", "extract(year from …)", "yes", "!tcxp:/firm.demo/sql/select?cols=year(worked_on),count(*)&from=work_logs&group=year(worked_on)"],
-    ["Aggregation", "count / sum / avg / min / max", "yes", "!tcxp:/school.demo/sql/select?cols=count(*),avg(gpa),min(gpa),max(gpa),sum(gpa)&from=students"],
-    ["Aggregation", "GROUP BY", "yes", "!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort"],
-    ["Aggregation", "HAVING", "yes", "!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort&having=gt(count(*),2)"],
-    ["Ordering", "ORDER BY ASC / DESC", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&order=desc(gpa),asc(last_name)"],
-    ["Ordering", "LIMIT / OFFSET", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&order=asc(student_id)&limit=$n&offset=2&$n=3"],
-    ["Joins", "INNER JOIN", "yes", "!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'"],
-    ["Joins", "LEFT JOIN", "yes", "!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)"],
-    ["Joins", "RIGHT JOIN", "yes", "!tcxp:/school.demo/sql/select?cols=courses.code,enrollments.status&from=enrollments&join=right(courses,eq(courses.course_id,enrollments.course_id))"],
-    ["Joins", "FULL OUTER JOIN", "yes", "!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))"],
-    ["Joins", "CROSS JOIN", "yes", "!tcxp:/school.demo/sql/select?cols=courses.code,students.cohort&from=courses&join=cross(students)"],
-    ["Variables", "Typed variable bound by $key=value", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'"],
-    ["Variables", "Variable bound by an @ call", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort"],
-    ["Gaps", "Unbound variable blocks execution", "yes", "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&~intent=How many hours did our people work in the US?&~spikes=[{\"id\":\"s1\",\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}]"],
-    ["Math", "Arithmetic and comparison in math/eval", "yes", "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3&~intent=Is 2x + 3 = 9 true when x = 3?&~spikes=[{\"id\":\"s1\",\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}]"],
-    ["Calls", "@ call to a registry function", "yes", "@!tcxp:/registry/hello?do=world"],
-    ["Annotations", "~spikes pointing at nodes, facets lit or dark", "yes", "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&~intent=The water is 29 °F. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]"],
-    ["Writes", "INSERT … VALUES … RETURNING", "yes", "!tcxp:/school.demo/sql/insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3"],
-    ["Writes", "UPDATE … SET … WHERE … RETURNING", "yes", "!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8"],
-    ["Writes", "DELETE FROM … WHERE … RETURNING", "yes", "!tcxp:/school.demo/sql/delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60"],
+    ["Projection", "SELECT column list", "yes", "!tcxp:/school.demo/sql/select?cols=first_name,gpa&from=students&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Projection", "SELECT *", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Projection", "Column alias (AS)", "yes", "!tcxp:/school.demo/sql/select?cols=as(gpa,grade)&from=students&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Source", "FROM table", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=courses&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Filter", "= <> < <= > >=", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=and(ge(gpa,3),ne(cohort,$c),lt(gpa,4))&$c='2025-fall'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Filter", "AND / OR / NOT", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=or(not(eq(cohort,'2026-fall')),gt(gpa,3.9))&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Filter", "IN (list)", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=courses&where=in(department,'CS','DS')&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Filter", "BETWEEN", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=between(gpa,3,3.5)&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Filter", "LIKE / ILIKE", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=ilike(email,$pat)&$pat='%25chen%25'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Filter", "IS NULL / IS NOT NULL", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=assignments&where=notnull(course_id)&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Expressions", "Arithmetic + - * /", "yes", "!tcxp:/school.demo/sql/select?cols=title,as(div(max_points,10),tenth)&from=assignments&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Expressions", "Scalar functions (round, lower, upper, coalesce)", "yes", "!tcxp:/school.demo/sql/select?cols=upper(code),coalesce(due_on,date'2026-12-31')&from=courses&join=left(assignments,eq(assignments.course_id,courses.course_id))&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Expressions", "extract(year from …)", "yes", "!tcxp:/firm.demo/sql/select?cols=year(worked_on),count(*)&from=work_logs&group=year(worked_on)&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Aggregation", "count / sum / avg / min / max", "yes", "!tcxp:/school.demo/sql/select?cols=count(*),avg(gpa),min(gpa),max(gpa),sum(gpa)&from=students&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Aggregation", "GROUP BY", "yes", "!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Aggregation", "HAVING", "yes", "!tcxp:/school.demo/sql/select?cols=cohort,count(*)&from=students&group=cohort&having=gt(count(*),2)&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Ordering", "ORDER BY ASC / DESC", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&order=desc(gpa),asc(last_name)&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Ordering", "LIMIT / OFFSET", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&order=asc(student_id)&limit=$n&offset=2&$n=3&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Joins", "INNER JOIN", "yes", "!tcxp:/school.demo/sql/select?cols=students.first_name,students.last_name,courses.title&from=students&join=inner(enrollments,eq(enrollments.student_id,students.student_id))&join=inner(courses,eq(courses.course_id,enrollments.course_id))&where=eq(courses.code,$course_code)&$course_code='CS101'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Joins", "LEFT JOIN", "yes", "!tcxp:/school.demo/sql/select?cols=students.student_id,students.email&from=students&join=left(submissions,eq(submissions.student_id,students.student_id))&where=isnull(submissions.submission_id)&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Joins", "RIGHT JOIN", "yes", "!tcxp:/school.demo/sql/select?cols=courses.code,enrollments.status&from=enrollments&join=right(courses,eq(courses.course_id,enrollments.course_id))&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Joins", "FULL OUTER JOIN", "yes", "!tcxp:/school.demo/sql/select?cols=courses.code,assignments.title&from=courses&join=full(assignments,eq(assignments.course_id,courses.course_id))&where=or(isnull(courses.course_id),isnull(assignments.assignment_id))&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Joins", "CROSS JOIN", "yes", "!tcxp:/school.demo/sql/select?cols=courses.code,students.cohort&from=courses&join=cross(students)&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Variables", "Typed variable bound by $key=value", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Variables", "Variable bound by an @ call", "yes", "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort=@!tcxp:/school.demo/fn/current_cohort&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Gaps", "Unbound variable blocks execution", "yes", "!tcxp:/firm.demo/sql/select?cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))&~context={\"intent\":[{\"role\":\"user\",\"text\":\"How many hours did our people work in the US?\"}],\"observe\":[{\"on\":[\"/where/0/1/0\",\"/$tax_year\"],\"meaning\":\"!tcxp:/firm.demo/notes/us-hours\",\"structure\":\"!tcxp:/firm.demo/rules/tax-year\",\"environment\":\"!tcxp:/firm.demo/env/fiscal-vs-tax\"}],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Math", "Arithmetic and comparison in math/eval", "yes", "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3&~context={\"intent\":[{\"role\":\"user\",\"text\":\"Is 2x + 3 = 9 true when x = 3?\"}],\"observe\":[{\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Calls", "@ call to a registry function", "yes", "@!tcxp:/registry/hello?do=world&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Annotations", "~spikes pointing at nodes, facets lit or dark", "yes", "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&~context={\"intent\":[{\"role\":\"user\",\"text\":\"The water is 29 °F. Will the sea ice up?\"}],\"observe\":[{\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Writes", "INSERT … VALUES … RETURNING", "yes", "!tcxp:/school.demo/sql/insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Writes", "UPDATE … SET … WHERE … RETURNING", "yes", "!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
+    ["Writes", "DELETE FROM … WHERE … RETURNING", "yes", "!tcxp:/school.demo/sql/delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60&~context={\"intent\":[],\"observe\":[],\"reason\":[],\"decide\":[],\"trace\":[]}"],
     ["Joins", "Table aliases (FROM students s)", "no", None],
     ["Projection", "SELECT DISTINCT", "no", None],
     ["Aggregation", "count(DISTINCT x)", "no", None],
@@ -1008,9 +1008,9 @@ WRITE_ORDER: Dict[str, List[str]] = {
 }
 
 RULES: List[List[str]] = [
-    ["scheme", "Starts with !tcxp:/ (an address) or @!tcxp:/ (a call)"],
-    ["meta-last", "Every ~meta key comes after every other key"],
-    ["call-target", "@ is only used on a function address or a write"],
+    ["scheme", "Starts with exactly !tcxp:/ (virtual) or tcxp:// (resolvable), optionally after @"],
+    ["context-last", "~context is present once, after every data key and $variable"],
+    ["call-target", "@ is only used on a function, a write or a resolvable address"],
     ["grammar", "Parses under the profile grammar with no errors"],
     ["canonical", "Re-serializes to exactly the same string"],
 ]
@@ -1018,5 +1018,9 @@ RULES: List[List[str]] = [
 FACETS: List[str] = ["meaning", "structure", "environment"]
 
 SCHEME: str = "!tcxp:/"
+
+RESOLVABLE: str = "tcxp://"
+
+CONTEXT_KEYS: List[str] = ["intent", "observe", "reason", "decide", "trace"]
 
 DEBOUNCE_MS: int = 300

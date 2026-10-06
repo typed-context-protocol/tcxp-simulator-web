@@ -16,6 +16,12 @@ import tcxp
 from tcxp._js import stringify
 
 VECTORS = Path(__file__).resolve().parent.parent / 'vectors'
+EMPTY = '~context={"intent":[],"observe":[],"reason":[],"decide":[],"trace":[]}'
+RESOLVABLE_AT_START = tcxp.list_resolvable()   # the demo entries, before any test registers more
+
+
+def full(u: str) -> str:
+    return u + ('&' if '?' in u else '?') + EMPTY
 
 
 def _lines(name: str) -> List[str]:
@@ -37,7 +43,9 @@ def _attempt(f: Callable[[], Any]) -> Any:
 
 
 def _query_set(tree: Dict[str, Any]) -> List[Any]:
-    sels = ['gaps', 'variables', 'references', 'operators', 'annotations', 'operators:eq', 'references:', 'pointer:/nope']
+    sels = ['gaps', 'variables', 'references', 'operators', 'annotations', 'operators:eq', 'references:', 'pointer:/nope',
+            'pointer:/~context/intent', 'pointer:/~context/intent/0', 'pointer:/~context/observe/0', 'pointer:/~context/trace/0',
+            'pointer:/~context/nope', 'pointer:/~context/observe/99', 'pointer:/~context/observe/0/on']
     labels: List[str] = []
     for r in tcxp.query(tree, 'references'):
         if r['label'] not in labels:
@@ -65,6 +73,7 @@ def fields(uri: str) -> Dict[str, Any]:
         return rec
     rec['canonical'] = tcxp.serialize(tree)['uri']
     rec['identity'] = tcxp.identity(tree)
+    rec['fingerprint'] = _attempt(lambda: tcxp.fingerprint(uri))
     rec['strict'] = _attempt(lambda: tcxp.strict_form(uri))
     rec['slots'] = tree['slots']
     rec['gaps'] = tree['gaps']
@@ -74,8 +83,6 @@ def fields(uri: str) -> Dict[str, Any]:
                      for s in tree['spikes']]
     rec['json'] = tcxp.to_json(tree)
     rec['from_json'] = _attempt(lambda: tcxp.serialize(tcxp.from_json(_json_roundtrip(tcxp.to_json(tree))))['uri'])
-    rec['result_key'] = tcxp.result_key(tree)
-    rec['required'] = tree['required']
     rec['query'] = _query_set(tree)
     rec['sql'] = _attempt(lambda: tcxp.to_sql(tree))
     rec['sql_inline'] = _attempt(lambda: tcxp.to_sql(tree, inline=True))
@@ -139,8 +146,7 @@ def test_pulse() -> None:
         reparsed = tcxp.parse_uri(out)
         return {'uri': exp['uri'], 'step': exp['step'], 'at': exp['at'], 'debounce': exp['debounce'], 'parent': exp['parent'],
                 'extra': exp['extra'],
-                'out': out, 'out_identity': tcxp.identity(reparsed),
-                'out_pulse': next(m for m in reparsed['parsed']['meta'] if m[0] == 'pulse')[1]}
+                'out': out, 'out_identity': tcxp.identity(reparsed), 'out_trace': reparsed['parsed']['context']['trace']}
     _check('pulse.jsonl', build)
 
 
@@ -148,8 +154,8 @@ def test_pulse_chain_parents() -> None:
     recs = [json.loads(line) for line in _lines('pulse.jsonl')]
     for prev, cur in zip(recs, recs[1:]):
         if cur['parent'] is not None:
-            assert cur['parent'] == tcxp.identity(tcxp.parse_uri(prev['uri']))
-        assert cur['out_pulse'][0]['parent'] == cur['parent']
+            assert cur['parent'] == tcxp.fingerprint(prev['uri'])
+        assert cur['out_trace'][0]['parent'] == cur['parent']
 
 
 def test_constants() -> None:
@@ -161,6 +167,7 @@ def test_constants() -> None:
     actual = {'registries': registries, 'queries': tcxp.QUERIES, 'write_clauses': tcxp.WRITE_CLAUSES, 'write_order': tcxp.WRITE_ORDER, 'groups': tcxp.GROUPS, 'coverage': tcxp.COVERAGE,
               'ops': tcxp.OPS, 'clauses': tcxp.CLAUSES, 'clause_order': tcxp.CLAUSE_ORDER, 'rules': tcxp.RULES,
               'facets': tcxp.FACETS, 'scheme': tcxp.SCHEME, 'debounce_ms': tcxp.DEBOUNCE_MS,
+              'resolvable_scheme': tcxp.RESOLVABLE, 'context_keys': tcxp.CONTEXT_KEYS, 'resolvable': RESOLVABLE_AT_START,
               'ddl': {r: tcxp.full_ddl(r) for r in tcxp.REGISTRIES if tcxp.REGISTRIES[r].get('db')},
               'base_type': [[t, tcxp.base_type(t)] for t in ['numeric(3,2)', 'integer', 'text', None, 'varchar(10)', 'a(b)(c)']]}
     for k in exp:
@@ -180,7 +187,8 @@ def _write_record(uri: str) -> Dict[str, Any]:
         rec['changed'] = tcxp.data_changed(st)
         return rec
     rec['changed'] = tcxp.data_changed(st)
-    rec['undo'] = [_attempt(lambda inv=inv: tcxp.execute(tcxp.parse_uri(inv), store=st)['kind']) for inv in rec['perform'].get('inverse') or []]
+    rec['undo'] = [_attempt(lambda inv=inv: tcxp.execute(tcxp.parse_uri(tcxp.full_address(inv)), store=st)['kind'])
+                   for inv in rec['perform'].get('inverse') or []]
     rec['restored'] = not tcxp.data_changed(st)
     return rec
 
@@ -219,7 +227,7 @@ def test_csv() -> None:
             r = tcxp.REGISTRIES[reg]
             rec['registry_after'] = {'title': r['title'], 'description': r['description'], 'tables': [t['name'] for t in r['db']['schema']['tables']]}
             rec['ddl'] = tcxp.full_ddl(reg)
-            rec['select'] = _attempt(lambda: tcxp.execute(tcxp.parse_uri('!tcxp:/' + reg + '/sql/select?cols=*&from=' + table + '&order=asc(row_id)'),
+            rec['select'] = _attempt(lambda: tcxp.execute(tcxp.parse_uri('!tcxp:/' + reg + '/sql/select?cols=*&from=' + table + '&order=asc(row_id)&' + EMPTY),
                                                           store=tcxp.new_store()))
         except Exception as e:  # noqa: BLE001
             rec['error'] = _err(e)
@@ -235,6 +243,61 @@ def test_csv() -> None:
 
 def test_names() -> None:
     _check('names.jsonl', lambda exp, i: {'name': exp['name'], 'position': exp['position'], **fields(exp['uri'])})
+
+
+class _Boom(Exception):
+    pass
+
+
+def _fetchers() -> Dict[str, Callable[[str, Dict[str, Any]], Any]]:
+    def boom(loc: str, o: Dict[str, Any]) -> Any:
+        raise _Boom('boom')
+    return {'echo': lambda loc, o: 'fetched ' + loc + ' base=' + ('undefined' if o.get('base') is None else o['base']),
+            'boom': boom, 'number': lambda loc, o: 5}
+
+
+def test_registry() -> None:
+    fetchers = _fetchers()
+    added: List[str] = []
+
+    def run(f: Callable[[], Any]) -> Dict[str, Any]:
+        try:
+            return {'ok': f()}
+        except Exception as e:  # noqa: BLE001
+            return _err(e)
+
+    def build(exp: Dict[str, Any], i: int) -> Dict[str, Any]:
+        what, args = exp['what'], exp['args']
+        if what == 'fullAddress':
+            out = run(lambda: tcxp.full_address(args[0]) if args[1] is None else tcxp.full_address(args[0], args[1]))
+        elif what == 'fingerprint':
+            out = run(lambda: tcxp.fingerprint(args[0]))
+        elif what in ('storeAddress', 'storeAddress again'):
+            out = run(lambda: tcxp.store_address(args[0]))
+        elif what == 'lookupAddress':
+            out = run(lambda: tcxp.lookup_address(args[0]))
+        elif what == 'registerResolvable':
+            def reg() -> None:
+                tcxp.register_resolvable(args[0])
+            out = run(reg)
+            if 'ok' in out:
+                added.extend(e['address'] for e in (args[0] if isinstance(args[0], list) else [args[0]]))
+        elif what == 'listResolvable':
+            out = run(lambda: tcxp.list_resolvable(args[0]))
+        elif what == 'execute':
+            out = run(lambda: tcxp.execute(tcxp.parse_uri(args[0])))
+        elif what == 'resolve':
+            out = run(lambda: tcxp.resolve(args[0], fetcher=fetchers[args[1]] if args[1] else None, base=args[2]))
+        else:
+            raise AssertionError(what)
+        return {'what': what, 'args': args, 'out': out}
+    try:
+        _check('registry.jsonl', build)
+    finally:
+        for r in tcxp.REGISTRIES.values():
+            if 'resolvable' in r:
+                r['resolvable'] = [x for x in r['resolvable'] if x['address'] not in added]
+            r.pop('addresses', None)
 
 
 @pytest.mark.parametrize('seed', [1, 7, 42, -3, 2 ** 31, 0])

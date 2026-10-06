@@ -179,7 +179,7 @@ def _compare_write(cur: Any, plain: Dict[str, Any], at: Dict[str, Any]) -> None:
         assert pg_cols == mem['returning']['columns']
     assert _pg_tables(cur, reg) == _mem_tables(store, reg)
     for u in mem['inverse']:
-        it = tcxp.parse_uri(u)
+        it = tcxp.parse_uri(tcxp.full_address(u))   # an inverse is a bare reference: it runs with a fresh context (R14)
         tcxp.execute(it, store=store)
         ig = tcxp.to_sql(it)
         assert ig is not None

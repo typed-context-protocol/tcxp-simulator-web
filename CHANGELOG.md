@@ -15,6 +15,11 @@ Spec: `SPEC.md`. v0.2 is a deliberate break from v0.1. `test/compat.mjs` convert
 - **Registries are not created by registering** (R45). `registerResolvable` and `storeAddress` under a registry that does not exist are errors (`code` `unknown-registry`).
 - **Spike rows have no id** (R50). Features refer to a spike by its position among the spike rows (labelled `s1`, `s2`, … for display); an `id` field in a row is ignored. `annotate` writes no id and refuses one. The v0.1 conversion drops `id` from `~spikes` rows, so the generated read streams changed: `test/v01-stream.json`'s `migrated_sha256` values were recaptured from the v0.1 engine (its `sha256` and `identity_sha256` are unchanged).
 - `"@"` is now also valid on write addresses and on `tcxp://` addresses. The filter rules are `scheme`, `context-last` (was `meta-last`), `call-target`, `grammar`, `canonical`.
+- **`serialize(tree, {meta: false})` is now `serialize(tree, {context: false})`.** The old option is ignored, so it now returns the full address, `~context` included. `identity(tree)` is unchanged.
+- **`toJSON` returns `context`** (the five arrays) in place of `meta`; `fromJSON` reads it. For `tcxp://` addresses it also has `form` and `data`.
+- **`withPulse` keeps a `debounce` of `0`.** 0.1.0 replaced any falsy debounce, 0 included, with 300; now only a missing one (`undefined` or `null`) becomes 300. The pulse row lives in `~context.trace`.
+- **Seeded addresses change form.** Every `FilterGenerator(seed).next()` address now ends with `~context` (the generator makes the same random draws, so the data parts are identical), and spike rows no longer carry ids.
+- **Error messages** for the address head changed with the exact formats (for example, the empty string and other schemes now get `An address is exactly "!tcxp:/<registry>/<path>" (virtual) or "tcxp://<registry>/<path>" (resolvable), optionally preceded by "@" to call it`). Errors now carry a `code`: `scheme`, `context` and `order` for the grammar, a PostgreSQL SQLSTATE for writes, `refused`, `edit`, and the resolvable-registry codes.
 
 ### Added
 
@@ -35,9 +40,44 @@ Spec: `SPEC.md`. v0.2 is a deliberate break from v0.1. `test/compat.mjs` convert
 - The read generator draws only on the v0.1 registries, so adding registries cannot change a seeded stream.
 - `toJSON` carries bindings for variables nothing uses, so `fromJSON` loses nothing.
 
-### Not yet released
+### Python package (`tcxp` on PyPI)
 
-The npm and PyPI release workflow checks the Python port against `tcxp.js`. v0.2.0 ships once the Python package is updated to match.
+The Python package is the same engine, ported line for line, and 0.2.0 has every change above under snake_case names. The breaking changes for Python code written against `tcxp` 0.1.0:
+- **Full addresses end with `~context`.** `parse_uri` requires it, rejects every other `~` key, and no longer trims whitespace or rewrites `!tcxp://`. Use `full_address(reference)` to give a bare address an empty context.
+- **`serialize(tree, meta=...)` is now `serialize(tree, context=...)`.** `identity(tree)` is unchanged.
+- **`to_json(tree)` returns `context`** in place of `meta`, and `from_json` reads it.
+- **`execute` returns `{'kind': 'halt', 'gaps': [...]}`** for an unbound variable (was `'gap'`).
+- **`with_pulse`** puts the pulse row first in `context['trace']` and keeps a `debounce` of `0`. Its `parent` is a fingerprint (see `fingerprint`, `store_address`, `lookup_address`).
+- **`FilterGenerator.meta(tree)` is now `FilterGenerator.context(tree)`.** Seeded addresses end with `~context`, and spike rows have no `id`.
+- **`TcxpError` has a `code`** (`None` when there is none).
+
+New in Python:
+- `execute(tree, store=None, preview=False)`, writes, `new_store`, `reset_data`, `data_changed`, `table_rows`, `WRITE_CLAUSES`, `WRITE_ORDER`
+- `edit`, `query`, `from_json`, `expr_text`, `register_csv`
+- `full_address`, `fingerprint`, `store_address`, `lookup_address`, `list_addresses`, `CONTEXT_KEYS`
+- `register_resolvable`, `list_resolvable`, `resolve` and `RESOLVABLE`
+- `FilterGenerator.next_write`
+
+`resolve` is synchronous (JavaScript returns a Promise), and the demo fixtures ship inside the package, so `file:` entries resolve from an installed wheel.
+
+Conformance: the Python package reproduces `tcxp.js` byte for byte over 8,384 vector records:
+- the collection (68)
+- 5,000 seeded addresses
+- 1,011 writes, previewed, performed and undone
+- 1,409 edits
+- 151 malformed addresses
+- 268 pulse chains
+- 79 registry, fingerprint and `resolve` steps
+- 20 CSV cases
+- 210 special-name cases
+
+It also matches the JavaScript number, JSON, date and URI semantics on 165 cases. Its PostgreSQL test runs the collection and 1,000 generated writes against a real server.
+
+Known differences (no vector covers them):
+- non-ISO date strings
+- the last bit of `pow` with a fractional exponent
+- the operating system's text in a failed fetch
+- **data-key order on `tcxp://` addresses.** Python keeps the written order for every key (RULES.md R20); `tcxp.js` moves integer-like key names first.
 
 ## 0.1.0 (2026-10-05)
 

@@ -34,6 +34,12 @@ const CLIENT_CSV = literal(/const CLIENT_CSV = `([^`]*)`;/, 'CLIENT_CSV');
 const clientBase = new Function('return ' + literal(/REGISTRIES\['client\.demo'\] = (\{[\s\S]*?\}\});/, "REGISTRIES['client.demo']"))();
 const clientTypes = new Function('return ' + literal(/registerCSV\('client\.demo', 'client_hours', CLIENT_CSV, (\{[^}]*\})\);/, 'registerCSV call'))();
 const CSV_SOURCES = [['client.demo', 'client_hours', CLIENT_CSV, clientTypes]];
+// Resolvable demo entries (src/data_resolvable.js), registered in Python at import in the same order, and the
+// fixture files they point to, shipped inside the Python package so file: locations resolve from a wheel.
+const RESOLVABLE_SOURCES = T.listResolvable();
+const fixturesDir = new URL('../../fixtures/', import.meta.url), pyFixtures = new URL('../src/tcxp/fixtures/', import.meta.url);
+fs.rmSync(pyFixtures, {recursive: true, force: true}); fs.mkdirSync(pyFixtures, {recursive: true});
+for (const f of fs.readdirSync(fixturesDir).sort()) fs.copyFileSync(new URL(f, fixturesDir), new URL(f, pyFixtures));
 const csvBuilt = new Set(CSV_SOURCES.map(c => c[0]));
 
 // Registries without their JS functions; the Python module attaches its own implementations.
@@ -59,6 +65,8 @@ const out = [
   '',
   'CSV_SOURCES: List[List[Any]] = ' + py(CSV_SOURCES),
   '',
+  'RESOLVABLE_SOURCES: List[Dict[str, str]] = ' + py(RESOLVABLE_SOURCES),
+  '',
   'GROUPS: List[List[str]] = ' + py(T.GROUPS),
   '',
   'COVERAGE: List[List[Any]] = ' + py(T.COVERAGE),
@@ -78,6 +86,10 @@ const out = [
   'FACETS: List[str] = ' + py(T.FACETS),
   '',
   'SCHEME: str = ' + py(T.SCHEME),
+  '',
+  'RESOLVABLE: str = ' + py(T.RESOLVABLE),
+  '',
+  'CONTEXT_KEYS: List[str] = ' + py(T.CONTEXT_KEYS),
   '',
   'DEBOUNCE_MS: int = ' + py(T.DEBOUNCE_MS),
   ''
