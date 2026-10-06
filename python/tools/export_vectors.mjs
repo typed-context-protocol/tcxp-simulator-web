@@ -1,6 +1,8 @@
 // Exports conformance vectors from tcxp.js into python/vectors/ (JSON Lines).
 // The Python package must reproduce every line byte for byte (see python/tests/test_vectors.py).
 // Usage: node python/tools/export_vectors.mjs
+// Vectors must not depend on the machine: pin the timezone before anything touches Date.
+process.env.TZ = 'UTC';
 import {createRequire} from 'module';
 import fs from 'fs';
 import zlib from 'zlib';
@@ -37,8 +39,13 @@ function fields(uri) {
 const counts = {};
 function write(name, recs) {
   const text = recs.map(r => JSON.stringify(r)).join('\n') + '\n';
-  // Large files are gzipped (gzip output from zlib is deterministic: no timestamp).
-  if (name.endsWith('.gz')) fs.writeFileSync(new URL(name, dir), zlib.gzipSync(Buffer.from(text, 'utf8'), {level: 9}));
+  // Large files are gzipped. zlib's compressed bytes differ by CPU, so an existing file whose
+  // decompressed content is unchanged is left as is; the content is the contract.
+  if (name.endsWith('.gz')) {
+    const url = new URL(name, dir);
+    const same = fs.existsSync(url) && zlib.gunzipSync(fs.readFileSync(url)).toString('utf8') === text;
+    if (!same) fs.writeFileSync(url, zlib.gzipSync(Buffer.from(text, 'utf8'), {level: 9}));
+  }
   else fs.writeFileSync(new URL(name, dir), text);
   counts[name] = recs.length;
 }
@@ -137,7 +144,7 @@ const JSONS = ['[1,', '{"a":}', '{a:1}', '[1 2]', '{"a":1 "b":2}', '{"a" 1}', '"
 const DATES = ['2026-08-12T00:00:00Z', '2026-09-11T21:04:00+00:00', '2026-02-30T00:00:00Z', '2026-13-01T00:00:00Z', '2026-09-11T24:00:00Z',
   '2026-09-11T24:00:01Z', '2026-08-12xyz', '2026-08-12T', '2026-08-12T10:00Z', '2026-08-12T10:00:00.5Z', '2026-08-12T10:00:00.123456Z',
   '2026-08-12T00:00:00z', '2026-08-12 10:00:00+01:00', '2026-08-12T00:00:00+0100', '2026', '2026-08', '+002026-08-12', '-000001-01-01',
-  '2026-08-12T10:00:00+23:59', '2026-08-12T10:00:00+01:60', '0000-01-01T00:00:00Z', '275760-09-13', '+275760-09-13T00:00:00.001Z'];
+  '2026-08-12T10:00:00+23:59', '2026-08-12T10:00:00+01:60', '0000-01-01T00:00:00Z', '+275760-09-13T00:00:00Z', '+275760-09-13T00:00:00.001Z'];
 const DECODES = ['abc', '%41', '%e2%82%ac', '%E2%82', '%', '%4', '%zz', '%C0%80', '%ED%A0%80', '%F0%9F%98%80', '%F4%90%80%80', '%26%3D', 'caf%C3%A9'];
 const NUMSTR = ['', ' 12 ', '0x1F', '1e3', '.5', '5.', '+1', '-', 'Infinity', '-Infinity', 'abc', '1_000', ' 12 ', '0b101', '1e400', '12abc'];
 const CMP = [['a', 'b'], ['B', 'a'], ['😀', '￿'], ['￿', '😀'], ['10', '9'], [10, '9'], ['abc', 1], [true, 0], [null, 0]];
