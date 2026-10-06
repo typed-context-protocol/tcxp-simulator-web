@@ -1101,10 +1101,27 @@ function sha256Hex(str) {
 }
 const canonicalFull = fullAddr => serialize(parseURI(fullAddr)).uri;
 function fingerprint(fullAddr) { return sha256Hex(canonicalFull(fullAddr)); }
-const ADDRESS_STORE = new Map();
-// storeAddress keeps the full canonical address under its fingerprint and returns the fingerprint.
-function storeAddress(fullAddr) { const canon = canonicalFull(fullAddr), fp = sha256Hex(canon); ADDRESS_STORE.set(fp, canon); return fp; }
-function lookupAddress(fp) { return ADDRESS_STORE.has(fp) ? ADDRESS_STORE.get(fp) : null; }
+// Full addresses live in the registry, by the same mechanism as resolvable entries: the registry named by the
+// address's first segment holds an ordered list "addresses" of {fingerprint, address} (created if missing).
+// storeAddress registers the full canonical address and returns its fingerprint; storing it again is a no-op.
+function storeAddress(fullAddr) {
+  const t = parseURI(fullAddr), canon = serialize(t).uri, fp = sha256Hex(canon);
+  const registry = t.parsed.registry;
+  const reg = own(REGISTRIES, registry) || setOwn(REGISTRIES, registry, {title: registry, description: 'Registry with stored addresses.', fns: dict(), notes: dict()});
+  if (!Object.hasOwn(reg, 'addresses')) reg.addresses = [];
+  if (!reg.addresses.some(e => e.fingerprint === fp)) reg.addresses.push({fingerprint: fp, address: canon});
+  return fp;
+}
+// lookupAddress: exact match on the fingerprint, across registries; null when nothing is registered under it.
+function lookupAddress(fp) {
+  for (const r of Object.keys(REGISTRIES)) { const reg = own(REGISTRIES, r); if (reg && Object.hasOwn(reg, 'addresses')) { const e = reg.addresses.find(x => x.fingerprint === fp); if (e) return e.address; } }
+  return null;
+}
+// Stored addresses in order: one registry's, or every registry's (registries in order, entries in order stored).
+function listAddresses(registry) {
+  const regs = registry === undefined ? Object.keys(REGISTRIES) : [registry];
+  return regs.flatMap(r => { const reg = own(REGISTRIES, r); return reg && Object.hasOwn(reg, 'addresses') ? reg.addresses.map(e => ({fingerprint: e.fingerprint, address: e.address})) : []; });
+}
 // Strict transport form: every character outside RFC 3986 unreserved/sub-delims is percent-encoded.
 function strictForm(uri) {
   return uri.replace(/[^A-Za-z0-9\-._~!$&'()*+,;=:@\/?%]/g, c => encodeURIComponent(c)).replace(/%(?![0-9A-Fa-f]{2})/g, '%25');
@@ -1961,7 +1978,7 @@ function registerCSV(registry, table, csvText, types) {
 /* ------------------------------------------------------- pulse */
 // Each committed state gets one pulse row in ~context.trace: {step, at, debounce_ms, parent}. Step counts commits,
 // not keystrokes. parent is the fingerprint of the previous committed full address (null for the first), and the
-// address store maps it back, so pulses form a chain. The new pulse row replaces any earlier one and goes first;
+// registry maps it back (storeAddress / lookupAddress), so pulses form a chain. The new pulse row replaces any earlier one and goes first;
 // other trace rows (such as source) are kept.
 const DEBOUNCE_MS = 300;
 // extra adds fields to the row, e.g. {undo: [inverse addresses]} for an executed write.
@@ -2337,7 +2354,7 @@ const api = {REGISTRIES, QUERIES, GROUPS, OPS, CLAUSES, CLAUSE_ORDER, COVERAGE, 
   newStore, resetData, dataChanged, tableRows, WRITE_CLAUSES, WRITE_ORDER,
   edit, query, fromJSON, registerCSV, exprText,
   RESOLVABLE, registerResolvable, listResolvable, resolve,
-  CONTEXT_KEYS, fullAddress, fingerprint, storeAddress, lookupAddress,
+  CONTEXT_KEYS, fullAddress, fingerprint, storeAddress, lookupAddress, listAddresses,
   fullDDL, tableDDL, tableInserts, TcxpError, baseType, findSlot, FilterGenerator, RULES};
 root.TCXP = api;
 if (typeof module !== 'undefined') module.exports = api;

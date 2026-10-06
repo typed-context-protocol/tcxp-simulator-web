@@ -173,8 +173,8 @@ A *reason card* is a spike whose meaning facet carries the human-readable defini
 
 - **Canonical form.** Data keys in their profile's fixed order (for SQL, `cols from join where group having order limit offset`; on a `tcxp://` address, the order written), then bindings in order of first appearance in the tree, then `~context` written compactly (no whitespace) with its keys in the fixed order. Values escape only `%`, `&`, `#` (and `=` inside data literals), so the form stays readable. Round trips of canonical addresses are byte-identical.
 - **Identity.** The address with `~context` removed. Nothing in the context changes identity. Equality is syntactic: two *equivalent* states compare equal only after normalization rules map them to the same tree.
-- **Fingerprint.** `fingerprint(fullAddress)` is the SHA-256 (lowercase hex) of the full canonical address, context included. Full addresses are kept in an address store keyed by fingerprint (`storeAddress`, `lookupAddress`).
-- **Pulse chain.** Each committed state stamps one pulse row first in `trace`: `{step, at, debounce_ms, parent}`. `step` counts committed addresses, not keystrokes; a commit happens after a `debounce_ms` quiet period. `parent` is the fingerprint of the previous committed full address (`null` for the first), so following parents back through the address store returns every step exactly. A new pulse row replaces the previous one; other `trace` rows (such as a source row) are kept.
+- **Fingerprint.** `fingerprint(fullAddress)` is the SHA-256 (lowercase hex) of the full canonical address, context included. Full addresses live in the registry, by the same mechanism as resolvable entries: the registry named by the address's first segment holds an ordered list of `{fingerprint, address}` entries. `storeAddress` registers one (storing it again is a no-op), `lookupAddress(fingerprint)` finds it by exact match, and `listAddresses(registry?)` lists them in order.
+- **Pulse chain.** Each committed state stamps one pulse row first in `trace`: `{step, at, debounce_ms, parent}`. `step` counts committed addresses, not keystrokes; a commit happens after a `debounce_ms` quiet period. `parent` is the fingerprint of the previous committed full address (`null` for the first), so following parents back through the registry returns every step exactly. A new pulse row replaces the previous one; other `trace` rows (such as a source row) are kept.
 - **Strict transport form.** Every character outside RFC 3986's unreserved and sub-delimiter sets is percent-encoded. It parses back to the identical canonical form.
 - **Browsers.** An address travels in the fragment: `page.html#!tcxp:/…`.
 - **Names are data.** A name in an address (registry, path, key, table, column, operator, variable, context key) is never a JavaScript property: `constructor`, `__proto__`, `toString` and the like behave exactly like any other unknown name.
@@ -205,7 +205,7 @@ These are declared out of scope, and the test suite lists them: table aliases, D
 `tcxp.js` exposes:
 
 - **Parsing and serialization:** `parseURI` (full addresses), `fullAddress(reference, context?)`, `serialize`, `identity`, `strictForm`, `CONTEXT_KEYS`
-- **Fingerprints:** `fingerprint(fullAddress)`, `storeAddress(fullAddress)`, `lookupAddress(fingerprint)`
+- **Fingerprints:** `fingerprint(fullAddress)`, and the registry's stored addresses: `storeAddress(fullAddress)`, `lookupAddress(fingerprint)`, `listAddresses(registry?)`
 - **Pointers:** `resolvePointer`
 - **Fibers:** `toSQL`, `toMath`, `toJSON`
 - **Execution:** `execute(tree, {store, preview})`, `withPulse(tree, step, at, debounce, parent, extra)`
@@ -279,7 +279,7 @@ One way to change any address, and one way to search it. Both work on any profil
 
 Operations apply in order; the address is re-parsed after each one. If an operation would produce an address that does not parse, has an error diagnostic, or fails `FilterGenerator.filter`, `edit` throws a plain-language `TcxpError` with `code:"edit"` that names the operation, and returns nothing. It never returns an invalid address.
 
-Unless `opts.pulse === false`, each `edit` call stamps a new pulse row (§8): `step` is the previous pulse's step plus one (1 if there was none), `parent` is the fingerprint of the full address before the edit (stored, so `lookupAddress` returns it), `debounce_ms` is 0 (a programmatic edit is not debounced), and `at` is now (or `opts.at`).
+Unless `opts.pulse === false`, each `edit` call stamps a new pulse row (§8): `step` is the previous pulse's step plus one (1 if there was none), `parent` is the fingerprint of the full address before the edit (registered, so `lookupAddress` returns it), `debounce_ms` is 0 (a programmatic edit is not debounced), and `at` is now (or `opts.at`).
 
 **`query(uri, selector) → [{pointer, kind, label}]`.** Selectors: `gaps`, `variables`, `references`, `references:<name>` (matches `name` or `table.name`), `operators`, `operators:<op>`, `annotations` (one row per resolving `on` pointer, labelled with the spike id and its MSE bits), `pointer:<path>` (including `/~context/…`). Pointers are positional (`/key/item/child/…`), one per occurrence. **Invariant:** every returned pointer resolves with `resolvePointer`.
 

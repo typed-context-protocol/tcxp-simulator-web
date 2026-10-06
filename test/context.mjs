@@ -106,7 +106,7 @@ for (const uri of corpus) {
   }
 }
 
-// 8. Fingerprints, the address store and the pulse chain.
+// 8. Fingerprints, addresses stored in the registry, and the pulse chain.
 {
   const u = T.fullAddress(V);
   tally('fingerprint is SHA-256 of the full canonical address', T.fingerprint(u) === createHash('sha256').update(u, 'utf8').digest('hex'));
@@ -115,6 +115,12 @@ for (const uri of corpus) {
   tally('fingerprint is of the canonical form', T.fingerprint(withQ(V, '~context=' + enc('{"intent": [], "observe":[],"reason":[],"decide":[],"trace":[]}'))) === T.fingerprint(u));
   const fp = T.storeAddress(long);
   tally('storeAddress / lookupAddress round-trip', T.lookupAddress(fp) === long && T.lookupAddress('0'.repeat(64)) === null);
+  tally('stored addresses live in the registry named by their first segment', T.REGISTRIES['fleet.demo'].addresses.some(e => e.fingerprint === fp && e.address === long)
+    && T.listAddresses('fleet.demo').some(e => e.fingerprint === fp) && !T.listAddresses('school.demo').some(e => e.fingerprint === fp));
+  const n = T.listAddresses('fleet.demo').length; T.storeAddress(long);
+  tally('storing the same address again is a no-op', T.listAddresses('fleet.demo').length === n);
+  const rfp = T.storeAddress(T.fullAddress('tcxp://firm.demo/rules/tax-year'));
+  tally('a resolvable full address is stored in its registry too', T.listAddresses('firm.demo').some(e => e.fingerprint === rfp));
   let cur = u; const seen = [u];
   for (let i = 0; i < 4; i++) { cur = T.edit(cur, [{op: 'context', key: 'observe', value: [{n: i}]}], {at: '2026-10-06T00:00:0' + i + '.000Z'}).uri; seen.push(cur); }
   let ok = true, node = cur, steps = [];

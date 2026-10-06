@@ -123,7 +123,7 @@ function buildAddress() {
   const used = binds.filter(b => { const k = b.slice(1, b.indexOf('=')); return probe.slots.includes(k) || required.includes(k); });
   if (used.length) base += '&' + used.join('&');
   // One ~context: intent rows; observe holds the spike rows and the manager's review rows; trace holds the pulse row
-  // (its parent is the fingerprint of the previous full address, kept in the address store) and the source row.
+  // (its parent is the fingerprint of the previous full address, registered in the registry) and the source row.
   const context = {
     intent,
     observe: spikes.filter(s => probe.slots.includes(s.on[0].slice(2))).concat(reviews),

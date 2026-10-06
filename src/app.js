@@ -572,7 +572,7 @@ function runTests() {
   // One chain through the collection, as if a person walked it in order: each pulse names the previous identity.
   const chain = []; trees.forEach((t, i) => { const prev = chain[chain.length - 1]; chain.push({uri: T.withPulse(t, i + 1, '2026-10-04T18:00:00.000Z', 300, prev ? T.storeAddress(prev.uri) : null)}); });
   { let pass = 0; chain.forEach((c, i) => { const row = T.parseURI(c.uri).parsed.context.trace.find(r => r && r.step !== undefined); if (i === 0 ? row.parent === null : chain.slice(0, i).some(e => e.uri === T.lookupAddress(row.parent))) pass++; });
-    inv.push(['Every parent is an earlier pulse', 'In a pulse chain, each parent is the fingerprint of an earlier full address, and the address store returns it exactly (the first has parent null)', pass, chain.length]); }
+    inv.push(['Every parent is an earlier pulse', 'In a pulse chain, each parent is the fingerprint of an earlier full address, and the registry returns it exactly (the first has parent null)', pass, chain.length]); }
   check('Every pointer resolves', 'Each annotation pointer lands on at least one node', t => t.spikes.length ? t.spikes.every(sp => sp.data) : null);
   check('Every lit facet resolves', 'Facet addresses resolve to notes in a registry', t => t.spikes.length ? t.spikes.every(sp => !sp.problems.length) : null);
   check('A gap always halts', 'A gap always halts. Nothing runs or writes until every required variable is bound.', t => { if (!t.gaps.length) return null; const st = T.newStore(); return T.execute(t, {store: st}).kind === 'halt' && !T.dataChanged(st); });
