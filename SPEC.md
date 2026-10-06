@@ -133,3 +133,12 @@ These are declared out of scope, and the test suite lists them: table aliases, D
 - **Fibers:** `toSQL`, `toMath`, `toJSON`
 - **Execution:** `execute`, `withPulse`
 - **Testing:** `FilterGenerator` (seeded random addresses, and `FilterGenerator.filter(uri)` to check any address against the rules)
+
+It is published in two languages, released together under the same version:
+
+| Language | Install | Import |
+|---|---|---|
+| JavaScript | `npm install @tcxp/tcxp` | `require('@tcxp/tcxp')` |
+| Python 3.10+ | `pip install tcxp` | `import tcxp` (the same API in snake_case: `parse_uri`, `to_sql`, …) |
+
+The Python package is a conformance port of `tcxp.js`. Before every release it must reproduce the JavaScript engine's output byte for byte over the vectors in `python/vectors/`.
