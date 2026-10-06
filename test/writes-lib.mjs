@@ -48,7 +48,7 @@ export async function compareWrite(T, pg, plain, at) {
   const okTables = same(await pgTables(T, pg, reg), memTables(T, store, reg));
   let okInverse = true;
   try {
-    for (const u of mem.inverse) { const it = T.parseURI(u); T.execute(it, {store}); const ig = T.toSQL(it); await pg.query(ig.sql, ig.params); }
+    for (const u of mem.inverse) { const it = T.parseURI(T.fullAddress(u)); T.execute(it, {store}); const ig = T.toSQL(it); await pg.query(ig.sql, ig.params); }   // an inverse is a bare reference: fresh context
     okInverse = same(await pgTables(T, pg, reg), seedTables(T, reg)) && same(memTables(T, store, reg), seedTables(T, reg)) && !T.dataChanged(store);
   } catch (e) { okInverse = false; }
   const ok = okPreview && okCount && okRet && okTables && okInverse;

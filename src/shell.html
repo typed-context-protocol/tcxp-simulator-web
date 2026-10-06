@@ -1,5 +1,5 @@
 <title>tcxp SQL Workbench</title>
-<meta name="description" content="Typed Context Protocol (tcxp) v0.1 reference workbench: addresses as expression trees of operators, values, variables and references, with gaps, annotations, calls and pulses.">
+<meta name="description" content="Typed Context Protocol (tcxp) v0.2 reference workbench: addresses as expression trees of operators, values, variables and references, with gaps, annotations, calls and pulses.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
@@ -93,7 +93,7 @@ a.btn { color: inherit; text-decoration: none; }
 .ex-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; border: 0; background: none; padding: 7px 8px; border-radius: 6px; color: var(--ink); line-height: 1.3; }
 .ex-item:hover { background: var(--paper); }
 .ex-item[aria-current="true"] { background: var(--sel); }
-.ex-item .meta { font: 11px var(--font-code); color: var(--ink-3); white-space: nowrap; }
+.ex-item .tag { font: 11px var(--font-code); color: var(--ink-3); white-space: nowrap; }
 .ex-item .t { min-width: 0; }
 .ex-item code { font-size: 12.5px; }
 .ex-item .gapdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--gap-fill); border: 1.5px dashed var(--gap-line); margin-left: 6px; vertical-align: 1px; }
@@ -114,8 +114,8 @@ a.btn { color: inherit; text-decoration: none; }
 .tok.k-slot, .tok.k-param { color: var(--var-line); font-weight: 600; }
 .tok.k-slotkey { background: var(--var-fill); color: var(--var-ink); padding: 1px 3px; font-weight: 600; }
 .tok.k-value { color: var(--val-line); }
-.tok.k-metakey { background: var(--ann-fill); color: var(--ann-ink); padding: 1px 3px; font-weight: 600; }
-.tok.k-meta { color: var(--ann-line); }
+.tok.k-contextkey { background: var(--ann-fill); color: var(--ann-ink); padding: 1px 3px; font-weight: 600; }
+.tok.k-context { color: var(--ann-line); }
 .tok.k-punct { color: var(--ink-3); }
 .tok.k-scheme, .tok.k-registry, .tok.k-path { color: var(--ink-2); }
 .tok.k-registry { font-weight: 600; }
@@ -163,6 +163,9 @@ a.btn { color: inherit; text-decoration: none; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend .dash { width: 18px; border-top: 2px dashed var(--var-line); }
+.resolvable-list { margin: 4px 6px 10px; width: calc(100% - 12px); font-size: 12px; }
+.resolvable-list td, .resolvable-list th { padding: 4px 6px; white-space: normal; word-break: break-all; }
+.ex-link { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--accent); }
 .find { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--line); }
 .find label { font-size: 12px; font-weight: 600; color: var(--ink-2); }
 .find input { flex: 1; min-width: 0; border: 1px solid var(--line-2); border-radius: 6px; padding: 5px 9px; background: var(--panel); color: var(--ink); font: 13px var(--font-code); }
@@ -258,7 +261,7 @@ ul.inverse code { font-family: var(--font-code); word-break: break-all; }
 .pulse .at { font: 12px var(--font-code); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .pulse .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apple { width: 12px; height: 12px; border-radius: 50%; background: #D9302C; border: 1.5px solid #8F1D1A; display: inline-block; }
-.apple.meta { background: transparent; }
+.apple.ctx { background: transparent; }
 .pulse .from { font: 12px var(--font-code); color: var(--ink-3); white-space: nowrap; }
 .pulse-empty { padding: 14px; color: var(--ink-3); font-size: 13px; }
 
@@ -359,7 +362,7 @@ ul.inverse code { font-family: var(--font-code); word-break: break-all; }
             <span><i class="chip reference"></i>Reference: names of things that exist</span>
             <span><i class="chip variable"></i>Variable: <code>$name</code></span>
             <span><i class="chip value"></i>Value: literals</span>
-            <span><i class="chip annotation"></i>Meta: <code>~key=</code></span>
+            <span><i class="chip annotation"></i>Context: <code>~context=</code></span>
           </div>
         </div>
       </div>

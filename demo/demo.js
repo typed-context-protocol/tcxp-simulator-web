@@ -117,25 +117,28 @@ function buildAddress() {
   const reviews = state.rules.filter(r => r.review).map(r => ({rule: r.id, verdict: r.review.verdict, at: r.review.at}));
   let base = '!tcxp:/' + REG + '/sql/select?' + keys.join('&');
   // bind only variables that appear in the tree (unknown variables would be "bound but never used")
-  let probe; try { probe = T.parseURI(base); } catch (e) { return {error: e.message, base}; }
+  let probe; try { probe = T.parseURI(T.fullAddress(base)); } catch (e) { return {error: e.message, base}; }
   // bind variables the query uses, plus any variable a rule requires (a rule can require something the query never mentions)
   const required = state.rules.map(r => r.require);
   const used = binds.filter(b => { const k = b.slice(1, b.indexOf('=')); return probe.slots.includes(k) || required.includes(k); });
   if (used.length) base += '&' + used.join('&');
-  const meta = [
-    '~pulse=' + enc(JSON.stringify([{step: state.step + 1, at: new Date().toISOString(), debounce_ms: 300, parent: state.tree ? T.identity(state.tree) : null}])),
-    '~intent=' + enc(JSON.stringify(intent)),
-    '~source=' + enc(JSON.stringify([{file: state.fileName, rows: state.csv.rows, fnv1a: state.csv.hash}])),
-    '~spikes=' + enc(JSON.stringify(spikes.filter(s => probe.slots.includes(s.on[0].slice(2)))))
-  ];
-  if (reviews.length) meta.push('~review=' + enc(JSON.stringify(reviews)));
-  try { const tree = T.parseURI(base + '&' + meta.join('&')); return {tree, uri: T.serialize(tree).uri}; }
+  // One ~context: intent rows; observe holds the spike rows and the manager's review rows; trace holds the pulse row
+  // (its parent is the fingerprint of the previous full address, registered in the registry) and the source row.
+  const context = {
+    intent,
+    observe: spikes.filter(s => probe.slots.includes(s.on[0].slice(2))).concat(reviews),
+    reason: [], decide: [],
+    trace: [{step: state.step + 1, at: new Date().toISOString(), debounce_ms: 300, parent: state.tree ? T.storeAddress(T.serialize(state.tree).uri) : null},
+            {file: state.fileName, rows: state.csv.rows, fnv1a: state.csv.hash}]
+  };
+  try { const tree = T.parseURI(base + '&~context=' + enc(JSON.stringify(context))); return {tree, uri: T.serialize(tree).uri}; }
   catch (e) { return {error: e.message, base}; }
 }
 
 /* --------------------------------------------------------- evaluate the rules */
-// A requirement is met only when its variable is bound in the address. An unmet requirement halts (v0.2: HALT is the
-// only protocol mode). Asking the user for the value is this app's handler for a halt, not a protocol mode.
+// These checklist rules are this app's own: a requirement is met only when its variable is bound, and an unmet one
+// stops the run here. The protocol's only halt rule is that an unbound variable halts; asking the user for the
+// value is this app's handler, not a protocol mode.
 function evaluate(tree) {
   const reqs = state.rules.map(r => {
     const bound = r.require in tree.parsed.bindings;
@@ -152,11 +155,16 @@ function evaluate(tree) {
 }
 
 /* ------------------------------------------------------------------ the loop */
+// The address without its pulse row (the row in trace that has "step"), to tell a real change from a re-stamp.
+function sansPulse(tree) {
+  const c = tree.parsed.context;
+  return T.identity(tree) + JSON.stringify(Object.assign({}, c, {trace: c.trace.filter(r => !(r && typeof r === 'object' && r.step !== undefined))}));
+}
 function commit(reason) {
   const built = buildAddress();
   if (!built) { renderAll(null); return null; }
   if (built.error) { renderAll(null, built.error); return null; }
-  if (state.tree && T.serialize(state.tree).uri.replace(/~pulse=[^&]*&?/, '') === built.uri.replace(/~pulse=[^&]*&?/, '')) return state.lastEval;
+  if (state.tree && sansPulse(state.tree) === sansPulse(built.tree)) return state.lastEval;
   state.step += 1;
   state.tree = built.tree; state.uri = built.uri;
   const ev = evaluate(built.tree); state.lastEval = ev;

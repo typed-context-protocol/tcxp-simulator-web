@@ -13,6 +13,7 @@ const JOIN_TAG = {inner:'INNER', left:'LEFT', full:'FULL OUTER', right:'RIGHT', 
 function queryTag(q) {
   const w = q.uri.match(/\/sql\/(insert|update|delete)\?/);
   if (w) return w[1].toUpperCase();
+  if (/^@?tcxp:\/\//.test(q.uri)) return 'RESOLVABLE';
   if (q.uri.startsWith('@')) return '@ CALL';
   if (q.uri.includes('/math/eval')) return 'MATH';
   const m = q.uri.match(/join=(inner|left|full|right|cross)\(/);
@@ -24,15 +25,18 @@ function queryTag(q) {
 function hasGap(q) { try { return T.parseURI(q.uri).gaps.length > 0; } catch (e) { return false; } }
 function renderExplorer() {
   const regs = Object.entries(T.REGISTRIES).map(([name, r]) => {
-    const tables = r.db ? r.db.schema.tables.map(t => `<button class="ex-item" data-table="${name}|${t.name}"><span class="t"><code>${t.name}</code></span><span class="meta" data-count="${name}|${t.name}">${r.db.seed[t.name].length} rows</span></button>`).join('') : '';
-    const fns = Object.keys(r.fns).map(f => `<button class="ex-item" data-uri="${esc('@!tcxp:/' + name + '/' + f)}"><span class="t"><code>${esc(f)}</code></span><span class="meta">function</span></button>`).join('');
-    const notes = Object.keys(r.notes).map(n => `<button class="ex-item" data-uri="${esc('!tcxp:/' + name + '/' + n)}"><span class="t"><code>${esc(n)}</code></span><span class="meta">note</span></button>`).join('');
-    const schema = r.db ? `<button class="ex-item" data-schema="${name}"><span class="t">Data dictionary and DDL</span><span class="meta">${r.db.schema.tables.length} tables</span></button>` : '';
-    return `<div class="ex-group-label"><code>${esc(name)}</code> · ${esc(r.description)}</div>${schema}${tables}${fns}${notes}`;
+    const tables = r.db ? r.db.schema.tables.map(t => `<button class="ex-item" data-table="${name}|${t.name}"><span class="t"><code>${t.name}</code></span><span class="tag" data-count="${name}|${t.name}">${r.db.seed[t.name].length} rows</span></button>`).join('') : '';
+    const fns = Object.keys(r.fns).map(f => `<button class="ex-item" data-uri="${esc(T.fullAddress('@!tcxp:/' + name + '/' + f))}"><span class="t"><code>${esc(f)}</code></span><span class="tag">function</span></button>`).join('');
+    const notes = Object.keys(r.notes).map(n => `<button class="ex-item" data-uri="${esc(T.fullAddress('!tcxp:/' + name + '/' + n))}"><span class="t"><code>${esc(n)}</code></span><span class="tag">note</span></button>`).join('');
+    const schema = r.db ? `<button class="ex-item" data-schema="${name}"><span class="t">Data dictionary and DDL</span><span class="tag">${r.db.schema.tables.length} tables</span></button>` : '';
+    const entries = T.listResolvable(name);
+    const links = entries.length ? `<table class="grid resolvable-list"><thead><tr><th>Resolvable address</th><th>Location</th></tr></thead><tbody>${entries.map(e =>
+      `<tr><td><button class="ex-link" data-uri="${esc(T.fullAddress(e.address))}"><code>${esc(e.address)}</code></button></td><td><code>${esc(e.location)}</code></td></tr>`).join('')}</tbody></table>` : '';
+    return `<div class="ex-group-label"><code>${esc(name)}</code> · ${esc(r.description)}</div>${schema}${tables}${fns}${notes}${links}`;
   }).join('');
   const groups = T.GROUPS.map(([g, label]) => {
     const items = T.QUERIES.filter(q => q.group === g).map(q =>
-      `<button class="ex-item" data-query="${q.id}"><span class="t">${esc(q.title.replace(/ \((inner|left|full outer) join\)$/i, ''))}${hasGap(q) ? '<i class="gapdot" title="Has a gap"></i>' : ''}</span><span class="meta">${queryTag(q)}</span></button>`).join('');
+      `<button class="ex-item" data-query="${q.id}"><span class="t">${esc(q.title.replace(/ \((inner|left|full outer) join\)$/i, ''))}${hasGap(q) ? '<i class="gapdot" title="Has a gap"></i>' : ''}</span><span class="tag">${queryTag(q)}</span></button>`).join('');
     return `<div class="ex-group-label">${esc(label)}</div>${items}`;
   }).join('');
   $('#explorer').innerHTML = `
@@ -41,6 +45,7 @@ function renderExplorer() {
     <details class="ex-section" open><summary>Registries</summary>${regs}</details>`;
   $('#explorer').addEventListener('click', e => {
     if (e.target.closest('#gen-one')) { state.gen = state.gen || new T.FilterGenerator(Date.now() % 100000); loadURI(state.gen.next()); return; }
+    const lk = e.target.closest('.ex-link'); if (lk) { loadURI(lk.dataset.uri); return; }
     const b = e.target.closest('.ex-item'); if (!b) return;
     if (b.dataset.query) selectQuery(b.dataset.query);
     else if (b.dataset.table) { const [r, t] = b.dataset.table.split('|'); openTable(r, t, b); }
@@ -68,22 +73,20 @@ function loadURI(uri) {
   state.queryId = match ? match.id : null;
   $('#uri-input').value = uri; markCurrent(); update(uri);
 }
-const metaOf = (tree, key) => { const m = tree.parsed.meta.find(x => x[0] === key); return m ? m[1] : undefined; };
-// ~intent is a string (legacy) or rows; the label is the string or the user row's text.
-const intentLabel = tree => { const v = metaOf(tree, 'intent'); if (typeof v === 'string') return v; const u = Array.isArray(v) ? v.find(r => r && r.role === 'user' && typeof r.text === 'string') : null; return u ? u.text : null; };
+const ctxOf = (tree, key) => tree.parsed.context[key];
+// The handlers' convention: the user's question is the intent row {role:"user", text}.
+const userText = tree => { const u = ctxOf(tree, 'intent').find(r => r && typeof r === 'object' && r.role === 'user' && typeof r.text === 'string'); return u ? u.text : null; };
 
 function update(uri) {
-  state.uri = uri.trim();
+  state.uri = uri;   // exactly as typed: the engine rejects whitespace and every other non-exact spelling
   const q = T.QUERIES.find(x => x.id === state.queryId);
   $('#reset-uri').hidden = !(q && q.uri !== state.uri);
   let tree = null, err = null;
   try { tree = T.parseURI(state.uri); } catch (e) { err = e; }
   state.tree = tree;
-  const intentMeta = tree ? metaOf(tree, 'intent') : undefined;
-  const userRow = Array.isArray(intentMeta) ? intentMeta.find(r => r && r.role === 'user' && typeof r.text === 'string') : null;
-  const intentText = (typeof intentMeta === 'string' ? intentMeta : userRow ? userRow.text : null) || (q ? q.intent : null);
+  const intentText = (tree ? userText(tree) : null) || (q ? q.intent : null);
   const sub = q ? q.title + (q.uri !== state.uri ? ' · edited' : '') : (tree ? tree.parsed.registry + '/' + tree.parsed.path : 'Address');
-  $('#intent').innerHTML = intentText ? `${esc(intentText)}<small>${esc(sub)}</small>` : `${esc(sub)}<small>No ~intent on this address</small>`;
+  $('#intent').innerHTML = intentText ? `${esc(intentText)}<small>${esc(sub)}</small>` : `${esc(sub)}<small>No user question in ~context.intent</small>`;
   if (!tree) {
     $('#anatomy').innerHTML = `<span class="tok k-punct">${esc(state.uri)}</span>`;
     $('#diags').innerHTML = `<li class="diag error">${esc(err.message)}</li>`;
@@ -125,6 +128,7 @@ function nodeText(n) {
     if (n.role === 'table') return [n.name, 'table'];
     if (n.role === 'handler') return [n.name, 'handler → ' + n.type];
     if (n.role === 'note') return [n.name, 'note'];
+    if (n.role === 'resolvable') return [n.name, 'resolvable entry'];
     if (n.role === 'alias') return [n.name, 'alias' + (n.type ? ' · ' + T.baseType(n.type) : '')];
     return [n.name, n.type ? T.baseType(n.type) : 'column'];
   }
@@ -164,9 +168,7 @@ function renderTree(tree) {
     kids.forEach(k => { place(k, cx, depth + 1); cx += k._tw + GAP; });
     n._x = (kids[0]._x + kids[kids.length - 1]._x) / 2;
   }
-  // Variables an ~intent row requires but the query never uses hang under a REQUIRES node beside the query tree.
-  const top = tree.intentSlots && tree.intentSlots.length
-    ? {kind: 'operator', op: 'intent', label: 'ADDRESS', synthetic: true, children: [tree.root, {kind: 'operator', op: 'requires', label: 'REQUIRED BY ~intent', synthetic: true, children: tree.intentSlots}]} : tree.root;
+  const top = tree.root;
   prep(top); place(top, PAD, 0);
   let maxY = 0; const nodes = [], edges = [];
   (function walk(n) { nodes.push(n); maxY = Math.max(maxY, n._y + n._h); (n.children || []).forEach(k => { edges.push([n, k]); walk(k); }); })(top);
@@ -229,13 +231,14 @@ const norm = v => {
 };
 const unordered = rs => JSON.stringify(rs.map(r => JSON.stringify(r)).sort());
 function snapshotCheck(tree, res) {
-  const s = SNAP.results[T.resultKey(tree)];
+  const s = SNAP.results[T.identity(tree)];
   if (!s) return null;
   if (res.kind === 'preview' || res.kind === 'write') {
     if (s.kind !== 'write') return false;
     return res.count === s.count && JSON.stringify(res.returning.columns) === JSON.stringify(s.columns) && unordered(res.returning.rows.map(r => r.map(norm))) === unordered(s.rows);
   }
   if (res.kind === 'error') return s.kind === 'error' && s.code === res.code;
+  if (res.kind === 'resolvable') return s.kind === 'resolvable' && s.location === res.location && s.registered === res.registered;
   if (s.kind !== res.kind) return false;
   if (s.kind === 'halt') return JSON.stringify(s.gaps) === JSON.stringify(res.gaps);
   if (s.kind === 'value') return norm(res.value) === s.value;
@@ -271,15 +274,13 @@ function literalFor(raw, type) {
 }
 // A halt: every missing variable, and for each one the intent rows that require it.
 function gapPanel(tree, res) {
-  const by = (res && res.requiredBy) || [];
   const rows = tree.gaps.map(name => {
     const slot = T.findSlot(tree.root, name) || (tree.parsed.items[name] && tree.parsed.items[name][0]);
     const type = slot && slot.type ? T.baseType(slot.type) : null;
     const notes = tree.spikes.filter(sp => sp.targets.some(t => t.nodes.includes(slot)))
       .flatMap(sp => ['environment', 'structure'].filter(f => sp.facets[f].lit).map(f => `<div class="env"><b>${esc(sp.id)} · ${f}:</b> ${esc(sp.facets[f].text)}</div>`)).join('');
     const isParam = slot && slot.param;
-    const reqs = by.filter(x => x.var === name).map(x => `<div class="env"><b>Required by intent row ${x.row + 1}${x.role ? ' (' + esc(x.role) + ')' : ''}:</b> ${esc(x.text)}</div>`).join('');
-    return `<div class="gaprow"><div><b><code>${isParam ? '' : '$'}${esc(name)}</code></b>${type ? ` expects <code>${esc(type)}</code>` : ''}. Nothing runs until it has a value.</div>${reqs}${notes}
+    return `<div class="gaprow"><div><b><code>${isParam ? '' : '$'}${esc(name)}</code></b>${type ? ` expects <code>${esc(type)}</code>` : ''}. Nothing runs until it has a value.</div>${notes}
       <form data-gap="${esc(name)}" data-type="${esc(type || '')}" data-param="${isParam ? 1 : 0}"><input id="gap-${esc(name)}" placeholder="Value for ${isParam ? '' : '$'}${esc(name)}" aria-label="Value for ${esc(name)}"><button class="btn small" type="submit">Bind</button></form></div>`;
   }).join('');
   return `<div class="gapbox"><h3>HALT · ${tree.gaps.length} gap${tree.gaps.length === 1 ? '' : 's'}</h3>${rows}</div>`;
@@ -307,6 +308,20 @@ function renderResult(tree) {
     title.textContent = 'Function';
     card.innerHTML = `<div class="returned"><span>${esc(tree.parsed.fn.doc)}</span><span style="color:var(--ink-3);font-size:13px">This address names the function. Put <code>@</code> in front to call it.</span><div><button class="btn small" id="call-it" type="button">Call it</button></div></div>`;
     $('#call-it').onclick = () => loadURI('@' + T.serialize(tree).uri);
+  } else if (res.kind === 'resolvable') {
+    // Shows where the entry points. Nothing is fetched until "Resolve" is pressed.
+    title.textContent = 'Resolvable address';
+    card.innerHTML = res.registered
+      ? `<div class="returned"><span>Its registry entry points to</span><code class="big" style="font-size:15px">${esc(res.location)}</code>
+         <span style="color:var(--ink-3);font-size:13px">Reading never fetches. Resolve fetches and shows the content at this location.</span>
+         <div><button class="btn small primary" id="resolve-it" type="button">Resolve</button></div><div id="resolved"></div></div>`
+      : `<div class="err-box">${esc(res.address)} is not registered. Registered entries are listed under each registry in the explorer.</div>`;
+    const btn = $('#resolve-it');
+    if (btn) btn.onclick = () => {
+      const out = $('#resolved'); out.innerHTML = '<span style="color:var(--ink-3)">Fetching…</span>';
+      T.resolve(res.address).then(text => { out.innerHTML = `<div class="sub-h">Content</div><pre class="code" style="white-space:pre-wrap">${esc(text)}</pre>`; },
+        err => { out.innerHTML = `<div class="err-box">${esc(err.message)}</div>`; });
+    };
   } else if (res.kind === 'note') {
     title.textContent = 'Note';
     card.innerHTML = `<div class="returned"><span style="font-size:15px">${esc(res.text)}</span><span style="color:var(--ink-3);font-size:13px">Annotations point at this address to light up a facet.</span></div>`;
@@ -379,7 +394,12 @@ function renderWrite(tree, card, title) {
   card.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
     const act = b.dataset.act;
     if (act === 'run') { const at = '@' + plainOf(tree); state.armed = T.identity(T.parseURI(at)); state.lastWrite = null; loadURI(at); }
-    else if (act === 'undo') { res.inverse.forEach(u => T.execute(T.parseURI(u))); state.lastWrite = null; refreshCounts(); loadURI(plainOf(tree)); }
+    else if (act === 'undo') {
+      res.inverse.forEach(u => T.execute(T.parseURI(T.fullAddress(u))));   // an inverse is a bare reference: fresh context
+      const wp = state.pulses.slice().reverse().find(p => p.undo && JSON.stringify(p.undo) === JSON.stringify(res.inverse));
+      const before = wp && wp.parent ? T.lookupAddress(wp.parent) : null;   // the full address before the write
+      state.lastWrite = null; refreshCounts(); loadURI(before || plainOf(tree));
+    }
     else if (act === 'reset') { T.resetData(); state.lastWrite = null; refreshCounts(); update(state.uri); }
   }));
 }
@@ -443,7 +463,7 @@ function renderFibers(tree) {
   }
   const json = JSON.stringify(T.toJSON(tree), null, 2);
   fib.JSON = {text: json, html: `<pre class="code">${esc(json)}</pre>`};
-  fib.URI = {text: T.identity(tree), html: `<pre class="code" style="white-space:pre-wrap;word-break:break-all">${esc(T.identity(tree))}</pre><div class="status-line">Identity form: the address with every ~meta key removed. Two snapshots of the same state compare equal on this string.</div><pre class="code" style="white-space:pre-wrap;word-break:break-all;border-top:1px solid var(--line)">${esc(T.strictForm(T.serialize(tree).uri))}</pre><div class="status-line">Strict transport form: every character outside RFC 3986 percent-encoded. It parses back to the same tree.</div>`};
+  fib.URI = {text: T.identity(tree), html: `<pre class="code" style="white-space:pre-wrap;word-break:break-all">${esc(T.identity(tree))}</pre><div class="status-line">Identity form: the address with ~context removed. Two snapshots of the same state compare equal on this string, whatever their context.</div><pre class="code" style="white-space:pre-wrap;word-break:break-all;border-top:1px solid var(--line)">${esc(T.strictForm(T.serialize(tree).uri))}</pre><div class="status-line">Strict transport form: every character outside RFC 3986 percent-encoded. It parses back to the same tree.</div>`};
   state.fibers = fib;
   const names = Object.keys(fib);
   if (!names.includes(state.fiber)) state.fiber = names[0];
@@ -458,17 +478,18 @@ function schedulePulse(tree) {
   state.timer = setTimeout(() => commitPulse(tree), T.DEBOUNCE_MS);
 }
 function commitPulse(tree) {
-  const withoutPulse = T.serialize(Object.assign({}, tree, {parsed: Object.assign({}, tree.parsed, {meta: tree.parsed.meta.filter(m => m[0] !== 'pulse')})})).uri;
+  const c = tree.parsed.context;
+  const withoutPulse = T.serialize(Object.assign({}, tree, {parsed: Object.assign({}, tree.parsed, {context: Object.assign({}, c, {trace: c.trace.filter(r => !(r && typeof r === 'object' && r.step !== undefined))})})})).uri;
   const last = state.pulses[state.pulses.length - 1];
   if (last && last.base === withoutPulse) return;
   state.step += 1;
   const at = new Date().toISOString();
-  const parent = last ? last.identity : null;
+  const parent = last ? T.storeAddress(last.uri) : null;   // fingerprint of the previous full address
   const id = T.identity(tree);
   const wrote = state.lastWrite && state.lastWrite.identity === id ? {undo: state.lastWrite.res.inverse} : {};
   const extra = Object.keys(wrote).length ? wrote : null;
   const uri = T.withPulse(tree, state.step, at, T.DEBOUNCE_MS, parent, extra);
-  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, undo: wrote.undo || null, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: intentLabel(tree) || tree.parsed.registry + '/' + tree.parsed.path});
+  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, undo: wrote.undo || null, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: userText(tree) || tree.parsed.registry + '/' + tree.parsed.path});
   renderPulses(); syncAddressBar();
 }
 function renderPulses() {
@@ -476,9 +497,9 @@ function renderPulses() {
   if (!state.pulses.length) { list.innerHTML = `<li class="pulse-empty">No pulses yet.</li>`; }
   else list.innerHTML = state.pulses.slice().reverse().map(p => `<li class="pulse" data-step="${p.step}" title="${esc(p.uri)}">
     <span class="step">#${p.step}</span><span class="at">${esc(p.at.slice(11, 23))}</span><span class="what">${esc(p.label)}</span>
-    <span class="from" title="${p.parent ? 'Parent: ' + esc(p.parent) : 'First pulse: no parent'}">${p.parentStep === null ? '' : 'from #' + p.parentStep}</span>
-    <i class="apple${p.changed ? '' : ' meta'}" title="${p.changed ? 'State changed' : 'Only meta changed'}"></i></li>`).join('');
-  $('#pulse-note').innerHTML = `<span>One pulse per committed address after a ${T.DEBOUNCE_MS} ms pause. Filled apple: the state changed. Hollow apple: only annotations or other meta changed. "from #n" names the parent pulse this state came from.</span>`;
+    <span class="from" title="${p.parent ? 'Parent fingerprint: ' + esc(p.parent) : 'First pulse: no parent'}">${p.parentStep === null ? '' : 'from #' + p.parentStep}</span>
+    <i class="apple${p.changed ? '' : ' ctx'}" title="${p.changed ? 'State changed' : 'Only the context changed'}"></i></li>`).join('');
+  $('#pulse-note').innerHTML = `<span>One pulse per committed address after a ${T.DEBOUNCE_MS} ms pause. Filled apple: the state changed. Hollow apple: only the context changed. "from #n" names the parent pulse; its fingerprint maps back to that exact address.</span>`;
 }
 
 /* ------------------------------------------------------------ sheets */
@@ -540,32 +561,29 @@ function runTests() {
   const trees = T.QUERIES.map(q => { try { return T.parseURI(q.uri); } catch (e) { return null; } }).filter(Boolean);
   const inv = [];
   const check = (name, why, fn) => { let pass = 0, total = 0; trees.forEach(t => { const r = fn(t); if (r === null) return; total++; if (r) pass++; }); inv.push([name, why, pass, total]); };
-  check('Identity ignores meta', 'Removing every ~key leaves the identity unchanged', t => {
-    if (!t.parsed.meta.length) return null;
-    // Split only the query part, and only on "&": a meta value may contain "?" (canonical form escapes only % & #).
-    const u = T.serialize(t).uri, qi = u.indexOf('?');
-    const kept = u.slice(qi + 1).split('&').filter(p => !p.startsWith('~'));
-    const stripped = u.slice(0, qi) + (kept.length ? '?' + kept.join('&') : '');
-    return T.identity(T.parseURI(stripped)) === T.identity(t);
+  const hasContext = t => T.CONTEXT_KEYS.some(k => t.parsed.context[k].length);
+  check('Identity ignores the context', 'Replacing the context with an empty one leaves the identity unchanged', t => {
+    if (!hasContext(t)) return null;
+    return T.identity(T.parseURI(T.fullAddress(T.identity(t)))) === T.identity(t);
   });
-  const PARENT = T.identity(trees[0]);
-  check('A pulse never changes identity', 'Adding ~pulse=[{step, at, debounce_ms, parent}] keeps the same identity, with or without a parent', t => [null, PARENT].every(par => T.identity(T.parseURI(T.withPulse(t, 7, '2026-10-04T18:00:00.000Z', 300, par))) === T.identity(t)));
+  const PARENT = T.fingerprint(T.serialize(trees[0]).uri);
+  check('A pulse never changes identity', 'Adding a pulse row {step, at, debounce_ms, parent} to ~context.trace keeps the same identity, with or without a parent', t => [null, PARENT].every(par => T.identity(T.parseURI(T.withPulse(t, 7, '2026-10-04T18:00:00.000Z', 300, par))) === T.identity(t)));
   check('Pulse round-trips', 'An address with a pulse (parent included) re-serializes to the identical string', t => { const u = T.withPulse(t, 7, '2026-10-04T18:00:00.000Z', 300, PARENT); return T.serialize(T.parseURI(u)).uri === u; });
   // One chain through the collection, as if a person walked it in order: each pulse names the previous identity.
-  const chain = []; trees.forEach((t, i) => { const prev = chain[chain.length - 1]; chain.push({uri: T.withPulse(t, i + 1, '2026-10-04T18:00:00.000Z', 300, prev ? prev.identity : null), identity: T.identity(t)}); });
-  { let pass = 0; chain.forEach((c, i) => { const row = T.parseURI(c.uri).parsed.meta.find(m => m[0] === 'pulse')[1][0]; if (i === 0 ? row.parent === null : chain.slice(0, i).some(e => e.identity === row.parent)) pass++; });
-    inv.push(['Every parent is an earlier pulse', 'In a pulse chain, each parent equals the identity of an earlier pulse (the first has parent null)', pass, chain.length]); }
+  const chain = []; trees.forEach((t, i) => { const prev = chain[chain.length - 1]; chain.push({uri: T.withPulse(t, i + 1, '2026-10-04T18:00:00.000Z', 300, prev ? T.storeAddress(prev.uri) : null)}); });
+  { let pass = 0; chain.forEach((c, i) => { const row = T.parseURI(c.uri).parsed.context.trace.find(r => r && r.step !== undefined); if (i === 0 ? row.parent === null : chain.slice(0, i).some(e => e.uri === T.lookupAddress(row.parent))) pass++; });
+    inv.push(['Every parent is an earlier pulse', 'In a pulse chain, each parent is the fingerprint of an earlier full address, and the registry returns it exactly (the first has parent null)', pass, chain.length]); }
   check('Every pointer resolves', 'Each annotation pointer lands on at least one node', t => t.spikes.length ? t.spikes.every(sp => sp.data) : null);
   check('Every lit facet resolves', 'Facet addresses resolve to notes in a registry', t => t.spikes.length ? t.spikes.every(sp => !sp.problems.length) : null);
   check('A gap always halts', 'A gap always halts. Nothing runs or writes until every required variable is bound.', t => { if (!t.gaps.length) return null; const st = T.newStore(); return T.execute(t, {store: st}).kind === 'halt' && !T.dataChanged(st); });
-  check('Intent rows never change identity', 'Removing ~intent (string or rows) leaves the identity unchanged', t => { const m = t.parsed.meta.find(x => x[0] === 'intent'); if (!m) return null; return T.identity(T.edit(T.serialize(t).uri, [{op: 'meta', key: 'intent', value: null}], {pulse: false}).tree) === T.identity(t); });
+  check('The context never changes identity', 'Changing ~context.intent leaves the identity unchanged', t => T.identity(T.edit(T.serialize(t).uri, [{op: 'context', key: 'intent', value: [{role: 'user', text: 'A different question'}]}], {pulse: false}).tree) === T.identity(t));
   check('Bound trees have no gaps', 'With every variable bound, execution produces a result or a plain-language refusal, never a halt', t => { if (t.gaps.length) return null; try { return T.execute(t, {store: T.newStore()}).kind !== 'halt'; } catch (e) { return !!e.code; } });
   check('A preview never writes', 'Running a write address without @ changes no data', t => { if (t.parsed.mode !== 'write' || t.gaps.length) return null; const st = T.newStore(); try { T.execute(t, {store: st, preview: true}); } catch (e) { if (!e.code) return false; } return !T.dataChanged(st); });
   check('Inverse restores the data', 'Applying a write and then its inverse addresses leaves every table as it was', t => {
     if (t.parsed.mode !== 'write' || t.gaps.length || t.diagnostics.some(d => d.level === 'error' || d.level === 'refused')) return null;
     const st = T.newStore(); let w;
     try { w = T.execute(T.parseURI('@' + T.serialize(t).uri.replace(/^@/, '')), {store: st}); } catch (e) { return e.code ? null : false; }
-    w.inverse.forEach(u => T.execute(T.parseURI(u), {store: st}));
+    w.inverse.forEach(u => T.execute(T.parseURI(T.fullAddress(u)), {store: st}));
     return !T.dataChanged(st);
   });
   $('#test-invariants').innerHTML = `<table class="grid"><thead><tr><th>Invariant</th><th>What it means</th><th>Result</th></tr></thead><tbody>${inv.map(([n, w, p, tot]) =>
@@ -596,19 +614,19 @@ function runGenerator() {
   const seed = Number($('#gen-seed').value) || 0, n = Math.min(5000, Math.max(1, Number($('#gen-n').value) || 300));
   const g = new T.FilterGenerator(seed); const uris = g.batch(n);
   const tally = {}; T.RULES.forEach(([id]) => { tally[id] = 0; });
-  let strict = 0, idMeta = 0, idMetaTotal = 0, gapsBlocked = 0, gapsTotal = 0; const kinds = {};
+  let strict = 0, idCtx = 0, idCtxTotal = 0, gapsBlocked = 0, gapsTotal = 0; const kinds = {};
   uris.forEach(u => {
     const f = T.FilterGenerator.filter(u);
     f.rules.forEach(r => { if (r.pass) tally[r.id]++; });
     if (!f.tree) return;
     try { if (T.serialize(T.parseURI(T.strictForm(u))).uri === u) strict++; } catch (e) {}
-    if (f.tree.parsed.meta.length) { idMetaTotal++; try { if (T.identity(T.parseURI(T.withPulse(f.tree, 1, '2026-01-01T00:00:00.000Z', 300))) === T.identity(f.tree)) idMeta++; } catch (e) {} }
+    if (T.CONTEXT_KEYS.some(k => f.tree.parsed.context[k].length)) { idCtxTotal++; try { if (T.identity(T.parseURI(T.withPulse(f.tree, 1, '2026-01-01T00:00:00.000Z', 300))) === T.identity(f.tree)) idCtx++; } catch (e) {} }
     try { const r = T.execute(f.tree); kinds[r.kind] = (kinds[r.kind] || 0) + 1; if (f.tree.gaps.length) { gapsTotal++; if (r.kind === 'halt') gapsBlocked++; } } catch (e) { kinds.error = (kinds.error || 0) + 1; }
   });
   const pill = (a, b) => a === b ? `<span class="pill ok">✓ ${a} / ${b}</span>` : `<span class="pill bad">✗ ${a} / ${b}</span>`;
   const rows = T.RULES.map(([id, name]) => `<tr><td>Rule: ${esc(name)}</td><td>${pill(tally[id], n)}</td></tr>`).join('') +
     `<tr><td>Strict percent-encoded form parses back to the same address</td><td>${pill(strict, n)}</td></tr>
-     <tr><td>Identity ignores ~meta (addresses that carry meta)</td><td>${pill(idMeta, idMetaTotal)}</td></tr>
+     <tr><td>Identity ignores ~context (addresses with a non-empty context)</td><td>${pill(idCtx, idCtxTotal)}</td></tr>
      <tr><td>A gap always halts</td><td>${pill(gapsBlocked, gapsTotal)}</td></tr>
      <tr><td>Outcomes</td><td>${Object.entries(kinds).map(([k, v]) => `<span class="pill mute">${esc(k)} ${v}</span>`).join(' ')}</td></tr>`;
   const samples = uris.slice(0, 8).map(u => `<li style="margin:4px 0"><button class="probe" data-uri="${esc(u)}">${esc(u)}</button></li>`).join('');
@@ -627,7 +645,7 @@ function syncAddressBar() {
 function readHash() {
   let h = location.hash.slice(1);
   try { h = decodeURI(h); } catch (e) {}
-  return h.startsWith('!tcxp:/') || h.startsWith('@!tcxp:/') ? h : null;
+  return ['!tcxp:/', '@!tcxp:/', 'tcxp://', '@tcxp://'].some(p => h.startsWith(p)) ? h : null;
 }
 
 /* ------------------------------------------------------------------- chat */

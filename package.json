@@ -7,7 +7,7 @@
   "license": "Apache-2.0",
   "publishConfig": { "access": "public" },
   "main": "tcxp.js",
-  "files": ["tcxp.js", "README.md", "SPEC.md", "LICENSE"],
+  "files": ["tcxp.js", "README.md", "SPEC.md", "LICENSE", "fixtures/"],
   "homepage": "https://github.com/typed-context-protocol/tcxp-simulator-web#readme",
   "repository": {
     "type": "git",
@@ -23,9 +23,10 @@
     "fuzz:writes": "node test/fuzz.mjs 1000 11 --writes",
     "compat": "node test/compat.mjs",
     "vectors": "node python/tools/export_vectors.mjs",
-    "gate": "npm run build && node test/verify.mjs && npm run build && node test/fuzz.mjs 2000 7 && node test/fuzz.mjs 1000 11 --writes && node test/compat.mjs && node test/api.mjs && node test/intent.mjs && lean lean/Tcxp.lean",
+    "gate": "npm run build && node test/verify.mjs && npm run build && node test/fuzz.mjs 2000 7 && node test/fuzz.mjs 1000 11 --writes && node test/compat.mjs && node test/api.mjs && node test/context.mjs && node test/formats.mjs && lean lean/Tcxp.lean",
     "api": "node test/api.mjs",
-    "intent": "node test/intent.mjs"
+    "context": "node test/context.mjs",
+    "formats": "node test/formats.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8"

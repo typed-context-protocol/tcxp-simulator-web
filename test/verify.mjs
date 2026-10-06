@@ -33,13 +33,13 @@ async function checkWrite(c, tree) {
   const pg = new PGlite(); await pg.exec(T.fullDDL(tree.parsed.registry));
   const w = await compareWrite(T, pg, plain, at);
   await pg.close();
-  [T.resultKey(plain), T.resultKey(at)].forEach(k => { results[k] = w.result; });
+  [T.identity(plain), T.identity(at)].forEach(k => { results[k] = w.result; });
   return w;
 }
 for (const c of cases) {
   try {
     const tree = T.parseURI(c.uri);
-    const id = T.resultKey(tree);
+    const id = T.identity(tree);
     const rt = T.serialize(tree).uri === c.uri;
     const strictRt = T.serialize(T.parseURI(T.strictForm(c.uri))).uri === c.uri;
     const mem = tree.parsed.mode === 'write' ? null : T.execute(tree);
@@ -51,7 +51,7 @@ for (const c of cases) {
       if (c.ref) { const inl = T.toSQL(tree, {inline: true}).sql.replace(/\s+/g, ' '); if (inl !== c.ref) { ok = false; console.log('  inline:', inl, '\n  ref:   ', c.ref); } }
     } else if (mem.kind === 'halt') {
       results[id] = {kind: 'halt', gaps: mem.gaps};
-      detail = 'halt ' + mem.gaps.join(',') + (mem.requiredBy ? ' (required by ~intent)' : '');
+      detail = 'halt ' + mem.gaps.join(',');
     } else if (mode === 'sql' || mode === 'math') {
       const g = T.toSQL(tree);
       const db = mode === 'sql' ? dbs[tree.parsed.registry] : scratch;
@@ -74,6 +74,7 @@ for (const c of cases) {
       }
       if (c.ref) { const inl = T.toSQL(tree, {inline: true}).sql.replace(/\s+/g, ' '); if (inl !== c.ref) { ok = false; console.log('  inline:', inl, '\n  ref:   ', c.ref); } }
     } else if (mem.kind === 'call') { results[id] = {kind: 'call', value: mem.value}; detail = 'call -> ' + mem.value; }
+    else if (mem.kind === 'resolvable') { results[id] = {kind: 'resolvable', registered: mem.registered, location: mem.location}; detail = 'resolvable -> ' + mem.location + ' (not fetched)'; }
     if (!rt) detail += ' ROUNDTRIP';
     if (!strictRt) detail += ' STRICT-ROUNDTRIP';
     if (!ok) fail++;
