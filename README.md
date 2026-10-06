@@ -24,6 +24,8 @@ npm install @tcxp/tcxp  # JavaScript
 pip install tcxp        # Python: same engine, same results (see python/)
 ```
 
+The published packages are **0.1.0**, which has none of the v0.2 features above (writes, edit and query, intent rows) and still reports a gap as kind `gap`. v0.2 ships as 0.2.0 once the Python port matches it; until then, use `tcxp.js` from this branch.
+
 The two registries use different names for the same engine. npm blocks the plain name `tcxp` as too similar to existing packages, so the npm package is scoped as `@tcxp/tcxp`. On PyPI it is `tcxp`.
 
 ```js
@@ -70,6 +72,9 @@ In the workbench:
 | `test/compat.mjs` | v0.1 backward compatibility against the frozen `test/v01-baseline.json` and `test/v01-stream.json` |
 | `test/api.mjs` | `edit`, `query`, `fromJSON`, `registerCSV`, and JavaScript-special names |
 | `test/intent.mjs` | Intent rows: required variables halt, identity is unchanged, ASK and ACT are reserved |
+| `python/` | The Python package `tcxp`: a conformance port of `tcxp.js`, checked against vectors exported from it |
+| `.github/workflows/release.yml` | Release on a version tag: gate, Python vectors, TestPyPI, then npm and PyPI after approval |
+| `LICENSE` | Apache-2.0 |
 
 ## The model in one table
 

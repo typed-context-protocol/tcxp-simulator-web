@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2 (unreleased)
+## 0.2.0 (unreleased)
 
 Spec: `SPEC.md` §12–§15. Every v0.1 address keeps its canonical string, identity, SQL fiber and result, except for the result-kind rename below; `test/compat.mjs` checks this against a frozen v0.1 baseline.
 
