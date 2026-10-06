@@ -14,8 +14,9 @@ A decision state, written as one line of text, that parses into an expression tr
 - **One edit and query API.** `edit(uri, ops)` changes any address with JSON Patch–style operations and never returns an invalid one; `query(uri, selector)` finds gaps, variables, references, operators and annotations; `fromJSON` inverts `toJSON`; `registerCSV` loads a CSV as a table (§13).
 - **Intent rows.** `~intent` can be a list of rows. A row that `require`s a variable makes the address halt until that variable is bound, even if the query never uses it (§14). HALT is the only implemented state; ASK and ACT are reserved for a future governor (§15).
 - **Names are data.** `constructor`, `__proto__` and friends behave like any other unknown name.
+- **Two address formats, spelled exactly.** `tcxp://…` is resolvable (the URI scheme being registered with IANA; specified with A3) and `!tcxp:/…` is virtual; `@` is a call marker in front of either. Any other spelling is rejected, with no normalization (§2).
 
-Every v0.1 address keeps its canonical string, identity, SQL and result. The one visible change: a gap's result kind is now `halt` instead of `gap`. See [CHANGELOG.md](CHANGELOG.md).
+Every address in the v0.1 collection keeps its canonical string, identity, SQL and result. The visible changes: a gap's result kind is now `halt` instead of `gap`, and spellings outside the two formats (such as `!tcxp://`) are rejected. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -87,10 +88,11 @@ In the workbench:
 | Gap | A variable with no value; the address halts | `$name` with no `$name=`, or required by an intent row |
 | Annotation | A spike pointing at nodes, with meaning, structure and environment lit or dark | `~spikes=[…]` |
 
-Address forms:
+Address formats (exactly two, spelled exactly; anything else is rejected):
 
-- `!tcxp:/…` names a state. For a write, it describes the write.
-- `@!tcxp:/…` calls a handler, or performs a write.
+- `tcxp://…` is resolvable: resolved through a registry. Specified with A3; not implemented in v0.2.
+- `!tcxp:/…` is virtual: not resolved. It names a state; for a write, it describes the write.
+- `@` in front of either is a call marker: `@!tcxp:/…` calls a handler, or performs a write.
 - `~` keys hold metadata and always come last. They never change identity.
 - `~pulse=[{"step","at","debounce_ms","parent"}]` stamps each committed state; `parent` links it to the state it came from, and an executed write adds `undo`.
 - `~intent=[{"role":"manager","text":"…","require":"$tax_year","if_empty":"HALT"}]` makes the address halt until `$tax_year` is bound.
