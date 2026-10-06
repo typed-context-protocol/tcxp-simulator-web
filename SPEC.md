@@ -16,10 +16,30 @@ tcxp has exactly two address formats. They are different states, not two spellin
 
 | Format | Meaning |
 |---|---|
-| `tcxp://…` | **Resolvable.** `tcxp://name` is an address in a registry, and that registry entry points to an external address (for example `https://…`). Resolving `tcxp://name` means looking up the name in the registry and returning the external address it points to. This is the URI scheme being registered with IANA. |
-| `!tcxp:/…` | **Virtual.** It is never resolved. |
+| `tcxp://<registry>/<path>…` | **Resolvable.** An entry in a registry, and the entry points to an external location (for example `https://…` or `file:…`). This is the URI scheme being registered with IANA. |
+| `!tcxp:/<registry>/<path>…` | **Virtual.** It is never resolved and never fetched. |
 
-**Locked rule: reading never fetches.** Resolving a `tcxp://` address returns the external address it points to; it never fetches that external address.
+**Resolving.** Resolving `tcxp://name` means fetching and returning the **content** at the location its registry entry points to. It does not return the location string.
+
+**Locked rule: reading never runs code and never fetches.** Fetching happens only when resolve is called explicitly. Parsing, reading, displaying or serializing a `tcxp://` address never fetches. `!tcxp:/` addresses are never resolved and never fetched.
+
+### Resolvable entries
+
+1. A registry holds a list of resolvable entries. Each entry is one `tcxp://` address and the external location it points to:
+   ```json
+   [
+     {"address": "tcxp://bank.demo/env/api-timezones", "location": "file:fixtures/api-timezones.md"},
+     {"address": "tcxp://time.demo/notes/yesterday",   "location": "https://example.com/yesterday.md"}
+   ]
+   ```
+2. `address` must be an exact `tcxp://` address. The first segment after `//` is the registry name, the same convention as the virtual format.
+3. `location` must use a scheme other than tcxp (`https:`, `file:`, and so on). An entry cannot point to another tcxp address, so there are no chains and no cycles.
+4. One entry per address. Registering a duplicate is an error.
+5. Lookup is an exact string match on `address`, with no normalization.
+6. `resolve(address)` fetches the content at `location` and returns it. It returns a clear error if the address is not registered or the fetch fails.
+7. Virtual `!tcxp:/` addresses never go in this list.
+8. The API registers entries, lists entries in order, and resolves an address. JavaScript and Python behave identically.
+9. Not yet: content hashes, caching, and external calls. `@tcxp://…` parses as a call, then returns a clear "external calls not supported yet" error.
 
 **`@` is a call marker, not a format.** It can go in front of either format: `@tcxp://…` or `@!tcxp:/…`.
 

@@ -14,7 +14,7 @@ A decision state, written as one line of text, that parses into an expression tr
 - **One edit and query API.** `edit(uri, ops)` changes any address with JSON Patch–style operations and never returns an invalid one; `query(uri, selector)` finds gaps, variables, references, operators and annotations; `fromJSON` inverts `toJSON`; `registerCSV` loads a CSV as a table (§13).
 - **Intent rows.** `~intent` can be a list of rows. A row that `require`s a variable makes the address halt until that variable is bound, even if the query never uses it (§14). HALT is the only implemented state; ASK and ACT are reserved for a future governor (§15).
 - **Names are data.** `constructor`, `__proto__` and friends behave like any other unknown name.
-- **Two address formats, spelled exactly.** `tcxp://name` is resolvable: a registry entry that points to an external address (such as `https://…`), and resolving it returns that address without fetching it. It is the URI scheme being registered with IANA. `!tcxp:/…` is virtual and never resolved; `@` is a call marker in front of either. Any other spelling is rejected, with no normalization (§2).
+- **Two address formats, spelled exactly.** `tcxp://<registry>/<path>` is resolvable: a registry entry that points to an external location (such as `https://…` or `file:…`), and resolving it fetches and returns the content there. It is the URI scheme being registered with IANA. Only an explicit resolve fetches; parsing, reading, displaying or serializing never does. `!tcxp:/…` is virtual and is never resolved or fetched; `@` is a call marker in front of either. Any other spelling is rejected, with no normalization (§2).
 
 Every address in the v0.1 collection keeps its canonical string, identity, SQL and result. The visible changes: a gap's result kind is now `halt` instead of `gap`, and spellings outside the two formats (such as `!tcxp://`) are rejected. See [CHANGELOG.md](CHANGELOG.md).
 
@@ -90,8 +90,8 @@ In the workbench:
 
 Address formats (exactly two, spelled exactly; anything else is rejected):
 
-- `tcxp://name` is resolvable: the registry entry `name` points to an external address, and resolving returns that address. Reading never fetches it.
-- `!tcxp:/…` is virtual: never resolved. It names a state; for a write, it describes the write.
+- `tcxp://<registry>/<path>` is resolvable: its registry entry points to an external location, and resolving fetches and returns the content there. Only an explicit resolve fetches.
+- `!tcxp:/…` is virtual: never resolved, never fetched. It names a state; for a write, it describes the write.
 - `@` in front of either is a call marker: `@!tcxp:/…` calls a handler, or performs a write.
 - `~` keys hold metadata and always come last. They never change identity.
 - `~pulse=[{"step","at","debounce_ms","parent"}]` stamps each committed state; `parent` links it to the state it came from, and an executed write adds `undo`.
