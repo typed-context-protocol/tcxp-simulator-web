@@ -99,14 +99,14 @@ const ctx = p => '~context=' + enc(JSON.stringify({intent: p.intent || [], obser
 // The handlers' convention for a plain question: one intent row {role:"user", text}.
 const userRow = text => ({role: 'user', text});
 
-const MUL_SPIKE = [{id: 's1', on: ['/expr/0/0/0'], meaning: '!tcxp:/registry/notes/implicit-mul', structure: '!tcxp:/registry/rules/implicit-mul', environment: null}];
+const MUL_SPIKE = [{on: ['/expr/0/0/0'], meaning: '!tcxp:/registry/notes/implicit-mul', structure: '!tcxp:/registry/rules/implicit-mul', environment: null}];
 const EQ = 'expr=eq(add(mul(2,$x),3),9)';
 const SEA_SPIKES = [
-  {id: 's1', on: ['/$water_temp'], meaning: '!tcxp:/fleet.demo/notes/water-temp', structure: '!tcxp:/fleet.demo/rules/water-temp', environment: null},
-  {id: 's2', on: ['/$freezing_point'], meaning: '!tcxp:/fleet.demo/notes/freezing-point', structure: null, environment: '!tcxp:/fleet.demo/env/sea-route'}
+  {on: ['/$water_temp'], meaning: '!tcxp:/fleet.demo/notes/water-temp', structure: '!tcxp:/fleet.demo/rules/water-temp', environment: null},
+  {on: ['/$freezing_point'], meaning: '!tcxp:/fleet.demo/notes/freezing-point', structure: null, environment: '!tcxp:/fleet.demo/env/sea-route'}
 ];
 const SEA = 'expr=lt($water_temp,$freezing_point)';
-const TAX_SPIKES = [{id: 's1', on: ['/where/0/1/0', '/$tax_year'], meaning: '!tcxp:/firm.demo/notes/us-hours', structure: '!tcxp:/firm.demo/rules/tax-year', environment: '!tcxp:/firm.demo/env/fiscal-vs-tax'}];
+const TAX_SPIKES = [{on: ['/where/0/1/0', '/$tax_year'], meaning: '!tcxp:/firm.demo/notes/us-hours', structure: '!tcxp:/firm.demo/rules/tax-year', environment: '!tcxp:/firm.demo/env/fiscal-vs-tax'}];
 const TAX = "cols=as(sum(work_logs.hours),us_hours)&from=work_logs&where=and(eq(work_logs.work_country,'US'),eq(year(work_logs.worked_on),$tax_year))";
 
 const QUERIES = [

@@ -58,9 +58,13 @@ for (const k of Object.keys(EMPTY)) {
 
 // 3. Canonical form: compact, keys fixed, byte-identical round trips (strict transport form too).
 {
-  const spaced = withQ(V, '~context=' + enc('{ "intent": [ {"role": "user", "text": "q?"} ], "observe": [], "reason": [], "decide": [], "trace": [] }'));
-  const t = T.parseURI(spaced), canon = T.serialize(t).uri;
-  tally('the context is written compactly', canon.endsWith('~context={"intent":[{"role":"user","text":"q?"}],"observe":[],"reason":[],"decide":[],"trace":[]}'), canon);
+  for (const [what, text] of [['spaces', '{ "intent": [], "observe": [], "reason": [], "decide": [], "trace": [] }'], ['a space after a colon', '{"intent": [],"observe":[],"reason":[],"decide":[],"trace":[]}'],
+    ['a newline', '{"intent":[],\n"observe":[],"reason":[],"decide":[],"trace":[]}'], ['a tab', '{"intent":[\t],"observe":[],"reason":[],"decide":[],"trace":[]}'], ['a carriage return', '{"intent":[],"observe":[],"reason":[],"decide":[],"trace":[]\r}']])
+    tally('a context with whitespace is rejected, not rewritten', rejected(withQ(V, '~context=' + enc(text)), /compactly/), what);
+  const t = T.parseURI(withQ(V, '~context=' + enc('{"intent":[{"role":"user","text":"q? \\" a  b"}],"observe":[],"reason":[],"decide":[],"trace":[]}')));
+  const canon = T.serialize(t).uri;
+  tally('whitespace inside strings is kept', t.parsed.context.intent[0].text === 'q? " a  b');
+  tally('the context is written compactly', canon.endsWith('~context=' + enc('{"intent":[{"role":"user","text":"q? \\" a  b"}],"observe":[],"reason":[],"decide":[],"trace":[]}')), canon);
   tally('a canonical address round-trips byte for byte', T.serialize(T.parseURI(canon)).uri === canon && T.serialize(T.parseURI(T.strictForm(canon))).uri === canon);
 }
 for (const uri of corpus) tally('every corpus address round-trips byte for byte', T.serialize(T.parseURI(uri)).uri === uri && T.serialize(T.parseURI(T.strictForm(uri))).uri === uri, uri);
@@ -83,6 +87,9 @@ for (const uri of corpus) {
   tally('/~context/<key> resolves to the array', T.resolvePointer(t, '/~context/trace')[0].length === 1);
   tally('out-of-range and unknown context pointers resolve to nothing', T.resolvePointer(t, '/~context/observe/2').length === 0 && T.resolvePointer(t, '/~context/pulse/0').length === 0 && T.resolvePointer(t, '/~context/observe/0/a').length === 0);
   tally('query pointer: works on the context', T.query(t, 'pointer:/~context/observe/1')[0].label === 'tcxp://firm.demo/rules/tax-year');
+  tally('annotate writes no id into the spike row', (() => { const u = T.edit(T.serialize(t).uri, [{op: 'annotate', on: ['/~context/observe/0'], meaning: 'm'}], {pulse: false}); const r = u.tree.parsed.context.observe.find(x => x.on); return !('id' in r); })());
+  tally('annotate refuses an id', (() => { try { T.edit(T.serialize(t).uri, [{op: 'annotate', on: ['/~context/observe/0'], id: 'x'}], {pulse: false}); return false; } catch (e) { return e instanceof T.TcxpError; } })());
+  tally('spikes are labelled by position; an id field in a row is ignored', (() => { const c = Object.assign({}, EMPTY, {observe: [{note: 1}, {id: 'zzz', on: ['/expr'], meaning: 'a'}, {on: ['/expr'], meaning: 'b'}]}); const sp = T.parseURI(withQ(V, C(c))).spikes; return sp.map(x => x.id).join() === 's1,s2'; })());
   tally('a spike can point into the context', (() => { const u = T.edit(T.serialize(t).uri, [{op: 'annotate', on: ['/~context/observe/0'], meaning: 'm'}], {pulse: false}); return u.tree.spikes[0].data === true; })());
 }
 
@@ -112,7 +119,7 @@ for (const uri of corpus) {
   tally('fingerprint is SHA-256 of the full canonical address', T.fingerprint(u) === createHash('sha256').update(u, 'utf8').digest('hex'));
   const long = T.QUERIES.find(q => q.id === 'ice-baltic').uri;
   tally('fingerprint handles non-ASCII text', T.fingerprint(long) === createHash('sha256').update(long, 'utf8').digest('hex'));
-  tally('fingerprint is of the canonical form', T.fingerprint(withQ(V, '~context=' + enc('{"intent": [], "observe":[],"reason":[],"decide":[],"trace":[]}'))) === T.fingerprint(u));
+  tally('fingerprint is of the canonical form', T.strictForm(u) !== u && T.fingerprint(T.strictForm(u)) === T.fingerprint(u));
   const fp = T.storeAddress(long);
   tally('storeAddress / lookupAddress round-trip', T.lookupAddress(fp) === long && T.lookupAddress('0'.repeat(64)) === null);
   tally('stored addresses live in the registry named by their first segment', T.REGISTRIES['fleet.demo'].addresses.some(e => e.fingerprint === fp && e.address === long)

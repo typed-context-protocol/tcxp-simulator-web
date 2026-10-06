@@ -73,7 +73,7 @@ An address is one of the two formats, optionally preceded by `@`, written exactl
 - **Data keys and variables.** A resolvable address takes data keys with any names and `$variables`, like a virtual one. A registry entry has no handler, so data key values are kept exactly as written and given no meaning.
 - **Reading.** `execute` on a `tcxp://` address returns `{kind:"resolvable", address, registered, location}`, where `address` is the entry (the part before `?`) and `location` is where it points (`registered:false, location:null` if there is no entry). It never fetches.
 - **Resolving.** `resolve(address, {fetcher, base})` takes a full address or a bare reference and returns a promise of the content (text). `file:` locations with a relative path (`file:fixtures/x.md`) are read relative to `base`, which defaults to the directory holding `tcxp.js` (in a browser, the page); `file:///…` is absolute; `http:` and `https:` use `fetch`. A `fetcher(location, {base})` can replace the default. Errors carry a `code`: `not-registered`, `fetch-failed`, `not-resolvable` (a virtual address), `not-supported` (`@tcxp://`).
-- **Registering.** `registerResolvable(entry | entries)` adds entries in order; errors carry `code` `duplicate`, `location` (no scheme, or a tcxp location) or `register` (not exactly `tcxp://<registry>/<path>`). `listResolvable(registry?)` lists them in order. Registering under a registry that does not exist creates it.
+- **Registering.** `registerResolvable(entry | entries)` adds entries in order; errors carry `code` `duplicate`, `location` (no scheme, or a tcxp location) or `register` (not exactly `tcxp://<registry>/<path>`). `listResolvable(registry?)` lists them in order. Registering under a registry that does not exist is an error (`code` `unknown-registry`); so is storing a full address there (§8).
 
 ### The virtual format
 
@@ -167,13 +167,15 @@ A **spike** is one annotation: an `observe` row with `on`, a list of pointers, s
 
 Each facet holds a bare tcxp address of a note, inline text, or `null`. A facet is **lit** when it holds inline text or the address of a note that exists in the registry, and **dark** otherwise. A spike's state is three bits (meaning, structure, environment), so 8 states. Comparing two spikes is a bitwise check plus string equality on identities. An unresolved pointer is shown as a warning, never an error.
 
+A spike row has no id. Features refer to a spike by its position among the spike rows; the workbench labels them `s1`, `s2`, … for display, and an `id` field in a row is ignored like any other unknown field.
+
 A *reason card* is a spike whose meaning facet carries the human-readable definition of a decision.
 
 ## 8. Canonical form, identity, fingerprints, transport
 
-- **Canonical form.** Data keys in their profile's fixed order (for SQL, `cols from join where group having order limit offset`; on a `tcxp://` address, the order written), then bindings in order of first appearance in the tree, then `~context` written compactly (no whitespace) with its keys in the fixed order. Values escape only `%`, `&`, `#` (and `=` inside data literals), so the form stays readable. Round trips of canonical addresses are byte-identical.
+- **Canonical form.** Data keys in their profile's fixed order (for SQL, `cols from join where group having order limit offset`; on a `tcxp://` address, the order written), then bindings in order of first appearance in the tree, then `~context` written compactly (no whitespace outside strings) with its keys in the fixed order. A `~context` with whitespace outside its strings is rejected, never rewritten. Values escape only `%`, `&`, `#` (and `=` inside data literals), so the form stays readable. Round trips of canonical addresses are byte-identical.
 - **Identity.** The address with `~context` removed. Nothing in the context changes identity. Equality is syntactic: two *equivalent* states compare equal only after normalization rules map them to the same tree.
-- **Fingerprint.** `fingerprint(fullAddress)` is the SHA-256 (lowercase hex) of the full canonical address, context included. Full addresses live in the registry, by the same mechanism as resolvable entries: the registry named by the address's first segment holds an ordered list of `{fingerprint, address}` entries. `storeAddress` registers one (storing it again is a no-op), `lookupAddress(fingerprint)` finds it by exact match, and `listAddresses(registry?)` lists them in order.
+- **Fingerprint.** `fingerprint(fullAddress)` is the SHA-256 (lowercase hex) of the full canonical address, context included. Full addresses live in the registry, by the same mechanism as resolvable entries: the registry named by the address's first segment holds an ordered list of `{fingerprint, address}` entries. `storeAddress` registers one (storing it again is a no-op; storing under a registry that does not exist is an error), `lookupAddress(fingerprint)` finds it by exact match, and `listAddresses(registry?)` lists them in order.
 - **Pulse chain.** Each committed state stamps one pulse row first in `trace`: `{step, at, debounce_ms, parent}`. `step` counts committed addresses, not keystrokes; a commit happens after a `debounce_ms` quiet period. `parent` is the fingerprint of the previous committed full address (`null` for the first), so following parents back through the registry returns every step exactly. A new pulse row replaces the previous one; other `trace` rows (such as a source row) are kept.
 - **Strict transport form.** Every character outside RFC 3986's unreserved and sub-delimiter sets is percent-encoded. It parses back to the identical canonical form.
 - **Browsers.** An address travels in the fragment: `page.html#!tcxp:/…`.
@@ -274,14 +276,14 @@ One way to change any address, and one way to search it. Both work on any profil
 | `{op:"replace", path:"/where/0/1", expr:"eq(a,$b)"}` | Replace the node at the pointer. A path of just `/key` replaces the whole value. Paths into a bound value are refused (use `bind`). On a `tcxp://` address the value is kept as written. |
 | `{op:"remove", path:"/order"}` | Remove a key, a list item (`/cols/1`), an operand (`/where/0/2`), a binding (`/$x`), a context array's entries (`/~context/observe`, leaving `[]`) or one entry (`/~context/observe/0`). |
 | `{op:"add", key:"order", expr:"desc(gpa)"}` | Add a data key, or append to a list key (`cols`, `order`, `group`, `join`, `values`, `set`, `returning`). Adding to a single-valued key that is already set is refused (use `replace`). |
-| `{op:"annotate", on:["/$tax_year"], meaning, structure, environment}` | Append a spike row to `observe` (id `s<n>` unless given). Every pointer in `on` must resolve. |
+| `{op:"annotate", on:["/$tax_year"], meaning, structure, environment}` | Append a spike row `{on, meaning, structure, environment}` to `observe`. A spike row has no id; an `id` in the operation is refused. Every pointer in `on` must resolve. |
 | `{op:"context", key:"observe", value:[…]}` | Replace one context array; `null` makes it `[]`. |
 
 Operations apply in order; the address is re-parsed after each one. If an operation would produce an address that does not parse, has an error diagnostic, or fails `FilterGenerator.filter`, `edit` throws a plain-language `TcxpError` with `code:"edit"` that names the operation, and returns nothing. It never returns an invalid address.
 
 Unless `opts.pulse === false`, each `edit` call stamps a new pulse row (§8): `step` is the previous pulse's step plus one (1 if there was none), `parent` is the fingerprint of the full address before the edit (registered, so `lookupAddress` returns it), `debounce_ms` is 0 (a programmatic edit is not debounced), and `at` is now (or `opts.at`).
 
-**`query(uri, selector) → [{pointer, kind, label}]`.** Selectors: `gaps`, `variables`, `references`, `references:<name>` (matches `name` or `table.name`), `operators`, `operators:<op>`, `annotations` (one row per resolving `on` pointer, labelled with the spike id and its MSE bits), `pointer:<path>` (including `/~context/…`). Pointers are positional (`/key/item/child/…`), one per occurrence. **Invariant:** every returned pointer resolves with `resolvePointer`.
+**`query(uri, selector) → [{pointer, kind, label}]`.** Selectors: `gaps`, `variables`, `references`, `references:<name>` (matches `name` or `table.name`), `operators`, `operators:<op>`, `annotations` (one row per resolving `on` pointer, labelled with the spike's position label (`s1`, `s2`, …) and its MSE bits), `pointer:<path>` (including `/~context/…`). Pointers are positional (`/key/item/child/…`), one per occurrence. **Invariant:** every returned pointer resolves with `resolvePointer`.
 
 **`fromJSON(json)`** is the inverse of `toJSON`: it rebuilds the full address from the profile, the tree and the context alone (it does not read `toJSON`'s `address` field). `identity(fromJSON(toJSON(t))) = identity(t)`, and the full canonical address is preserved too.
 
@@ -292,7 +294,7 @@ Unless `opts.pulse === false`, each `edit` call stamps a new pulse row (§8): `s
 Handlers are applications built on the protocol: the workbench, the tax intake demo, and yours. They decide what rows to write and what to do after a halt. Their conventions are not protocol rules; another handler may choose differently.
 
 - **A plain question** is written as one `intent` row `{"role":"user","text":"…"}`. The workbench shows the first such row as the address's question.
-- **Annotations** are `observe` rows `{"id","on":[pointers],"meaning","structure","environment"}` (§7).
+- **Annotations** are `observe` rows `{"on":[pointers],"meaning","structure","environment"}` (§7).
 - **The pulse** is the `trace` row `{"step","at","debounce_ms","parent"}`, plus `undo` after an executed write (§8, §12). The tax intake demo also writes a source row `{"file","rows","fnv1a"}` in `trace`.
 - **What happens after a halt is the handler's.** The protocol decides only *whether* something may run: an unbound variable halts. The tax intake demo keeps a manager's checklist as `intent` rows (`{"role":"manager","text":…,"require":"$tax_year",…}`), applies those rules itself, asks for the tax year in its chat, and records the manager's verdicts as `observe` rows `{"rule","verdict","at"}`. All of that is the demo's own handling; none of it is protocol.
 

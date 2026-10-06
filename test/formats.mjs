@@ -90,13 +90,13 @@ tally('virtual address -> never resolved', await code(() => T.resolve('!tcxp:/fi
 tally('lookup uses the part before ?: a full address with data keys and context resolves the same entry', await T.resolve(F(R + '?k=v&$x=1', ctxWith({intent: [{role: 'user', text: 'x'}]}))) === fixture);
 tally('a reference in the context is never resolved or fetched by reading', (() => { const n = totalCalls(); T.execute(T.parseURI(F(V, ctxWith({observe: [R]})))); return totalCalls() === n; })());
 tally('a non-exact spelling is rejected, not looked up', await code(() => T.resolve(R + '/')) === 'scheme');
-T.registerResolvable({address: 'tcxp://test.demo/missing', location: 'file:fixtures/does-not-exist.md'});
-tally('failed fetch (missing file) -> error', await code(() => T.resolve('tcxp://test.demo/missing')) === 'fetch-failed');
-T.registerResolvable({address: 'tcxp://test.demo/remote', location: 'https://example.com/remote.md'});
+T.registerResolvable({address: 'tcxp://client.demo/missing', location: 'file:fixtures/does-not-exist.md'});
+tally('failed fetch (missing file) -> error', await code(() => T.resolve('tcxp://client.demo/missing')) === 'fetch-failed');
+T.registerResolvable({address: 'tcxp://client.demo/remote', location: 'https://example.com/remote.md'});
 const nf = calls.fetch;
-tally('failed fetch (network off) -> error', await code(() => T.resolve('tcxp://test.demo/remote')) === 'fetch-failed');
-tally('an injected fetcher gets the location and its text is returned', await T.resolve('tcxp://test.demo/remote', {fetcher: async loc => 'remote text for ' + loc}) === 'remote text for https://example.com/remote.md');
-tally('an injected fetcher that throws -> error', await code(() => T.resolve('tcxp://test.demo/remote', {fetcher: async () => { throw new Error('boom'); }})) === 'fetch-failed');
+tally('failed fetch (network off) -> error', await code(() => T.resolve('tcxp://client.demo/remote')) === 'fetch-failed');
+tally('an injected fetcher gets the location and its text is returned', await T.resolve('tcxp://client.demo/remote', {fetcher: async loc => 'remote text for ' + loc}) === 'remote text for https://example.com/remote.md');
+tally('an injected fetcher that throws -> error', await code(() => T.resolve('tcxp://client.demo/remote', {fetcher: async () => { throw new Error('boom'); }})) === 'fetch-failed');
 tally('no test reached the network (fetch spy only refused)', calls.fetch === nf + 1, JSON.stringify(calls));
 tally('@tcxp:// parses as a call', (() => { const t = T.parseURI(F('@' + R)); return t.parsed.call && t.parsed.form === 'resolvable'; })());
 tally('@tcxp:// -> not supported yet (execute)', await code(() => T.execute(T.parseURI(F('@' + R)))) === 'not-supported');
@@ -105,16 +105,18 @@ tally('@tcxp:// -> not supported yet (resolve)', await code(() => T.resolve('@' 
 // 6. Registration: duplicates, tcxp locations, virtual or non-exact addresses are errors.
 const reg = e => { try { T.registerResolvable(e); return 'ok'; } catch (err) { return err instanceof T.TcxpError ? err.code : 'JS ' + err.message; } };
 tally('duplicate registration -> error', reg({address: R, location: 'file:fixtures/other.md'}) === 'duplicate');
-tally('a tcxp: location -> error (no chains)', reg({address: 'tcxp://test.demo/chain', location: 'tcxp://firm.demo/rules/tax-year'}) === 'location');
-tally('a TCXP: location -> error (scheme is case-insensitive)', reg({address: 'tcxp://test.demo/chain2', location: 'TCXP://firm.demo/rules/tax-year'}) === 'location');
-tally('a virtual location -> error', reg({address: 'tcxp://test.demo/chain3', location: '!tcxp:/firm.demo/rules/tax-year'}) === 'location');
-tally('a location without a scheme -> error', reg({address: 'tcxp://test.demo/rel', location: 'fixtures/x.md'}) === 'location');
-tally('a virtual address cannot be registered', reg({address: '!tcxp:/test.demo/x', location: 'https://example.com/x'}) === 'register');
-tally('a non-exact address cannot be registered', reg({address: 'tcxp://test.demo//x', location: 'https://example.com/x'}) === 'register');
-tally('an address with @ or a query cannot be registered (the entry is the part before ?)', reg({address: '@tcxp://test.demo/x', location: 'https://example.com/x'}) === 'register' && reg({address: 'tcxp://test.demo/x?~a=1', location: 'https://example.com/x'}) === 'register');
-tally('entries list in registration order', JSON.stringify(T.listResolvable('test.demo').map(e => e.address)) === JSON.stringify(['tcxp://test.demo/missing', 'tcxp://test.demo/remote']));
+tally('a tcxp: location -> error (no chains)', reg({address: 'tcxp://client.demo/chain', location: 'tcxp://firm.demo/rules/tax-year'}) === 'location');
+tally('a TCXP: location -> error (scheme is case-insensitive)', reg({address: 'tcxp://client.demo/chain2', location: 'TCXP://firm.demo/rules/tax-year'}) === 'location');
+tally('a virtual location -> error', reg({address: 'tcxp://client.demo/chain3', location: '!tcxp:/firm.demo/rules/tax-year'}) === 'location');
+tally('a location without a scheme -> error', reg({address: 'tcxp://client.demo/rel', location: 'fixtures/x.md'}) === 'location');
+tally('a virtual address cannot be registered', reg({address: '!tcxp:/client.demo/x', location: 'https://example.com/x'}) === 'register');
+tally('a non-exact address cannot be registered', reg({address: 'tcxp://client.demo//x', location: 'https://example.com/x'}) === 'register');
+tally('an address with @ or a query cannot be registered (the entry is the part before ?)', reg({address: '@tcxp://client.demo/x', location: 'https://example.com/x'}) === 'register' && reg({address: 'tcxp://client.demo/x?~a=1', location: 'https://example.com/x'}) === 'register');
+tally('entries list in registration order', JSON.stringify(T.listResolvable('client.demo').map(e => e.address)) === JSON.stringify(['tcxp://client.demo/missing', 'tcxp://client.demo/remote']));
 tally('virtual addresses never appear in the list', T.listResolvable().every(e => e.address.startsWith('tcxp://')));
-delete T.REGISTRIES['test.demo'];
+tally('registering under a registry that does not exist -> error', reg({address: 'tcxp://nope.demo/x', location: 'https://example.com/x'}) === 'unknown-registry' && !Object.hasOwn(T.REGISTRIES, 'nope.demo'));
+tally('storing a full address under a registry that does not exist -> error', (() => { try { T.storeAddress(F('tcxp://nope.demo/x')); return false; } catch (e) { return e instanceof T.TcxpError && e.code === 'unknown-registry' && !Object.hasOwn(T.REGISTRIES, 'nope.demo'); } })());
+delete T.REGISTRIES['client.demo'].resolvable;
 
 console.log(Object.entries(res).map(([k, v]) => (v.pass === v.total ? 'ok  ' : 'FAIL') + ' ' + k + ': ' + v.pass + '/' + v.total).join('\n'));
 console.log(JSON.stringify({formats: 'v0.2', checks: Object.values(res).reduce((a, v) => a + v.total, 0), failures: fail}));

@@ -196,10 +196,22 @@ function isReference(s) {
   if (typeof s !== 'string') return false;
   try { return !splitPairs(scanAddress(s).query).some(([k]) => k[0] === '~'); } catch (e) { return false; }
 }
+// JSON whitespace (space, tab, newline, carriage return) outside string literals.
+function hasJSONWhitespace(text) {
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) { if (ch === '\\') i++; else if (ch === '"') inStr = false; }
+    else if (ch === '"') inStr = true;
+    else if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') return true;
+  }
+  return false;
+}
 function readContext(text) {
   const bad = msg => { throw new TcxpError(msg, '~context', 'context'); };
   let v;
   try { v = JSON.parse(text); } catch (e) { bad('~context is not valid JSON: ' + e.message); }
+  if (hasJSONWhitespace(text)) bad('~context is written compactly: no whitespace outside strings');
   if (!isRow(v)) bad('~context is one JSON object: {"intent":[],"observe":[],"reason":[],"decide":[],"trace":[]}');
   const keys = Object.keys(v);
   const extra = keys.filter(k => !CONTEXT_KEYS.includes(k)), missing = CONTEXT_KEYS.filter(k => !keys.includes(k));
@@ -347,7 +359,8 @@ function registerResolvable(entries) {
     if (!m) bad('Location ' + JSON.stringify(e.location) + ' for ' + e.address + ' needs a scheme, such as https: or file:', 'location');
     if (m[1].toLowerCase() === 'tcxp') bad('Location ' + JSON.stringify(e.location) + ' for ' + e.address + ' is a tcxp address; an entry must point to an external location (no chains)', 'location');
     const registry = a.registry;
-    const reg = own(REGISTRIES, registry) || setOwn(REGISTRIES, registry, {title: registry, description: 'Registry with resolvable entries.', fns: dict(), notes: dict()});
+    const reg = own(REGISTRIES, registry);
+    if (!reg) bad('Registry ' + JSON.stringify(registry) + ' does not exist; ' + e.address + ' cannot be registered', 'unknown-registry');
     if (!Object.hasOwn(reg, 'resolvable')) reg.resolvable = [];
     if (reg.resolvable.some(x => x.address === e.address)) bad(e.address + ' is already registered', 'duplicate');
     reg.resolvable.push({address: e.address, location: e.location});
@@ -639,7 +652,8 @@ function descend(children, segs) {
 
 /* ------------------------------------------- annotations (spikes) */
 // Spike rows live in ~context.observe and are recognised by their "on" field:
-// {"id":..,"on":[pointers],"meaning":..,"structure":..,"environment":..}. Rows without "on" are not spikes.
+// {"on":[pointers],"meaning":..,"structure":..,"environment":..}. Rows without "on" are not spikes. A spike has no id:
+// features refer to it by its position among the spike rows (labelled s1, s2, … for display only).
 // Data is the anchor (the nodes pointed at). Each facet is lit when it holds inline text or a note that exists.
 const FACETS = ['meaning','structure','environment'];
 function resolveNote(addr) {
@@ -650,7 +664,7 @@ function readSpikes(tree) {
   const rows = tree.parsed.context.observe.filter(r => isRow(r) && r.on !== undefined);
   return rows.map((row, i) => {
     const problems = [];
-    const id = row && row.id ? String(row.id) : 's' + (i + 1);
+    const id = 's' + (i + 1);
     const on = row && row.on ? (Array.isArray(row.on) ? row.on : [row.on]) : [];
     const targets = on.map(p => ({ptr: p, nodes: resolvePointer(tree, p)}));
     targets.forEach(t => { if (!t.nodes.length) problems.push('pointer ' + t.ptr + ' does not resolve to a node'); });
@@ -787,7 +801,8 @@ function fingerprint(fullAddr) { return sha256Hex(canonicalFull(fullAddr)); }
 function storeAddress(fullAddr) {
   const t = parseURI(fullAddr), canon = serialize(t).uri, fp = sha256Hex(canon);
   const registry = t.parsed.registry;
-  const reg = own(REGISTRIES, registry) || setOwn(REGISTRIES, registry, {title: registry, description: 'Registry with stored addresses.', fns: dict(), notes: dict()});
+  const reg = own(REGISTRIES, registry);
+  if (!reg) throw new TcxpError('Registry ' + JSON.stringify(registry) + ' does not exist; the address cannot be stored', 'store', 'unknown-registry');
   if (!Object.hasOwn(reg, 'addresses')) reg.addresses = [];
   if (!reg.addresses.some(e => e.fingerprint === fp)) reg.addresses.push({fingerprint: fp, address: canon});
   return fp;
@@ -1505,10 +1520,9 @@ function applyEdit(uri, tree, op, i) {
     case 'annotate': {
       const on = Array.isArray(op.on) ? op.on : [op.on];
       if (!on.length || on.some(p => !resolvePointer(tree, p).length)) fail('every pointer in on must resolve to a node; ' + on.filter(p => !resolvePointer(tree, p).length).join(', ') + ' does not');
-      const c = tree.parsed.context, spikes = c.observe.filter(r => isRow(r) && r.on !== undefined);
-      const id = op.id || 's' + (spikes.length + 1);
-      if (spikes.some(r => r.id === id)) fail('an annotation ' + id + ' already exists');
-      const row = {id, on, meaning: op.meaning === undefined ? null : op.meaning, structure: op.structure === undefined ? null : op.structure, environment: op.environment === undefined ? null : op.environment};
+      const c = tree.parsed.context;
+      if (op.id !== undefined) fail('a spike row has no id; spikes are referred to by position');
+      const row = {on, meaning: op.meaning === undefined ? null : op.meaning, structure: op.structure === undefined ? null : op.structure, environment: op.environment === undefined ? null : op.environment};
       return setContext(head, pairs, Object.assign({}, c, {observe: c.observe.concat([row])}));
     }
     case 'context': {
@@ -1912,7 +1926,7 @@ class FilterGenerator {
       const rows = []; const n = 1 + this.int(2);
       for (let i = 0; i < n; i++) {
         const ptr = this.randomPointer(tree); if (!ptr) break;
-        const row = {id: 's' + (i + 1), on: [ptr]};
+        const row = {on: [ptr]};
         FACETS.forEach(f => { row[f] = this.chance(0.5) ? (this.chance(0.8) ? this.pick(notes) : 'Inline note for ' + f) : null; });
         rows.push(row);
       }

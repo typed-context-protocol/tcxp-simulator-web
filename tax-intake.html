@@ -308,7 +308,7 @@ function buildAddress() {
   const binds = Object.entries(state.binds).map(([k, v]) => '$' + k + '=' + (/^-?\d+(\.\d+)?$/.test(v) ? v : lit(v)));
   state.rules.forEach(r => { T.REGISTRIES[REG].notes['rules/' + r.id] = r.text; });
   const intent = [{role: 'user', text: state.question}].concat(state.rules.map(r => ({role: 'manager', id: r.id, text: r.text, require: '$' + r.require, if_empty: r.if_empty})));
-  const spikes = state.rules.map((r, i) => ({id: 's' + (i + 1), on: ['/$' + r.require], meaning: null, structure: '!tcxp:/' + REG + '/rules/' + r.id, environment: null}));
+  const spikes = state.rules.map((r, i) => ({on: ['/$' + r.require], meaning: null, structure: '!tcxp:/' + REG + '/rules/' + r.id, environment: null}));
   const reviews = state.rules.filter(r => r.review).map(r => ({rule: r.id, verdict: r.review.verdict, at: r.review.at}));
   let base = '!tcxp:/' + REG + '/sql/select?' + keys.join('&');
   // bind only variables that appear in the tree (unknown variables would be "bound but never used")
