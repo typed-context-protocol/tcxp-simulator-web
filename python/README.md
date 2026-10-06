@@ -67,7 +67,7 @@ Trees and results are plain dicts and lists with the same keys as the JavaScript
 
 ## Conformance
 
-`vectors/` holds conformance vectors exported from `tcxp.js` by `tools/export_vectors.mjs`:
+`vectors/` holds conformance vectors exported from `tcxp.js` (the engine shipped on npm as `@tcxp/tcxp`) by `tools/export_vectors.mjs`:
 - every collection and coverage address
 - 5,000 `FilterGenerator` addresses with seed 7
 - `with_pulse` chains

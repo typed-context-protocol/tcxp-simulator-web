@@ -15,6 +15,8 @@ npm install @tcxp/tcxp  # JavaScript
 pip install tcxp        # Python: same engine, same results (see python/)
 ```
 
+The two registries use different names for the same engine. npm blocks the plain name `tcxp` as too similar to existing packages, so the npm package is scoped as `@tcxp/tcxp`. On PyPI it is `tcxp`.
+
 ```js
 const tcxp = require('@tcxp/tcxp');
 const uri = "!tcxp:/school.demo/sql/select?cols=*&from=students&where=eq(cohort,$cohort)&$cohort='2026-fall'";
