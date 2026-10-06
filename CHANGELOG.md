@@ -7,7 +7,7 @@ Spec: `SPEC.md` §12–§15. Every v0.1 address keeps its canonical string, iden
 ### Breaking
 
 - **A gap's result kind is now `halt`** (was `gap`). `execute` on an address with an unbound variable returns `{kind:"halt", gaps:[…]}` with the same gaps list as before; when intent rows require the variables, it also lists them in `requiredBy`. In the v0.1 collection this affects 5 cases (`equation-gap`, `ice-gap`, `us-hours-gap` and the two probes that reuse them).
-- **Exactly two address formats, spelled exactly** (SPEC §2). `tcxp://…` is resolvable (specified with A3) and `!tcxp:/…` is virtual; `@` is a call marker in front of either. Every other spelling is rejected, with no tolerance and no normalization: `!tcxp://…` and `@!tcxp://…` (v0.1 accepted these and rewrote them to `!tcxp:/`), `!tcxp:///…`, `tcxp:/…`, empty path segments anywhere (`//` inside the path, a trailing `/`), and leading or trailing whitespace (v0.1 trimmed it).
+- **Exactly two address formats, spelled exactly** (SPEC §2). `tcxp://name` is resolvable (a registry entry pointing to an external address; resolving returns that address and never fetches it) and `!tcxp:/…` is virtual and never resolved; `@` is a call marker in front of either. Every other spelling is rejected, with no tolerance and no normalization: `!tcxp://…` and `@!tcxp://…` (v0.1 accepted these and rewrote them to `!tcxp:/`), `!tcxp:///…`, `tcxp:/…`, empty path segments anywhere (`//` inside the path, a trailing `/`), and leading or trailing whitespace (v0.1 trimmed it).
 - `"@"` is now also valid on write addresses (`sql/insert`, `sql/update`, `sql/delete`), where it performs the write. The filter rule `call-target` reads "@ is only used on a function address or a write".
 
 ### Added

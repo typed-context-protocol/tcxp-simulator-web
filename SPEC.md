@@ -16,8 +16,10 @@ tcxp has exactly two address formats. They are different states, not two spellin
 
 | Format | Meaning |
 |---|---|
-| `tcxp://…` | **Resolvable:** resolved through a registry. This is the URI scheme being registered with IANA. |
-| `!tcxp:/…` | **Virtual:** not resolved. |
+| `tcxp://…` | **Resolvable.** `tcxp://name` is an address in a registry, and that registry entry points to an external address (for example `https://…`). Resolving `tcxp://name` means looking up the name in the registry and returning the external address it points to. This is the URI scheme being registered with IANA. |
+| `!tcxp:/…` | **Virtual.** It is never resolved. |
+
+**Locked rule: reading never fetches.** Resolving a `tcxp://` address returns the external address it points to; it never fetches that external address.
 
 **`@` is a call marker, not a format.** It can go in front of either format: `@tcxp://…` or `@!tcxp:/…`.
 
@@ -29,7 +31,7 @@ tcxp has exactly two address formats. They are different states, not two spellin
 - an empty path segment anywhere: `//` inside the path, or a trailing `/`
 - leading or trailing whitespace
 
-**v0.2 implements only the virtual format**; the rest of this specification describes it. The resolvable format will be specified with A3 (external references and the network registry).
+The rest of this specification, from §3 on, describes the virtual format.
 
 ### The virtual format
 
@@ -38,7 +40,7 @@ tcxp has exactly two address formats. They are different states, not two spellin
 @!tcxp:/<registry>/<path>?<param>=<value>&…&~<meta>=<value>&…                   a call
 ```
 
-- **`!`** marks the address as virtual. It is not resolved, on a network or anywhere else.
+- **`!`** marks the address as virtual. It is never resolved, on a network or anywhere else.
 - **`@`** in front means *call*: the system you are running in finds the named handler in its registry and invokes it. On a write address (§12) it means *perform the write*; without `@` the same address only describes the write.
 - **`<registry>`** is the first path segment. It names an in-memory, virtual registry (for example `school.demo`, `registry`).
 - **`<path>`** selects what inside the registry the address refers to. Every segment is non-empty. v0.2 defines:
