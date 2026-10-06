@@ -10,8 +10,18 @@ const T = createRequire(import.meta.url)('../../tcxp.js');
 const dir = new URL('../vectors/', import.meta.url);
 fs.mkdirSync(dir, {recursive: true});
 
-const errOf = e => ({error: e.message, type: e instanceof T.TcxpError ? 'TcxpError' : e.constructor.name, where: e.where === undefined ? null : e.where});
+const errOf = e => ({error: e.message, type: e instanceof T.TcxpError ? 'TcxpError' : e.constructor.name, where: e.where === undefined ? null : e.where,
+  code: e.code === undefined ? null : e.code});
 const attempt = f => { try { return f(); } catch (e) { return errOf(e); } };
+
+// query() over a fixed set of selectors, plus one per reference name and one pointer:<path>.
+function querySet(tree) {
+  const sels = ['gaps', 'variables', 'references', 'operators', 'annotations', 'operators:eq', 'references:', 'pointer:/nope'];
+  [...new Set(T.query(tree, 'references').map(r => r.label))].forEach(l => sels.push('references:' + l));
+  const vars = T.query(tree, 'variables').concat(T.query(tree, 'operators'));
+  if (vars.length) sels.push('pointer:' + vars[0].pointer);
+  return sels.map(sel => [sel, attempt(() => T.query(tree, sel))]);
+}
 
 // Every field the two engines must agree on, for one address.
 function fields(uri) {
@@ -28,11 +38,15 @@ function fields(uri) {
   rec.spikes = tree.spikes.map(s => ({id: s.id, on: s.on, bits: s.bits, data: s.data, problems: s.problems, facets: s.facets,
     targets: s.targets.map(t => ({ptr: t.ptr, count: t.nodes.length}))}));
   rec.json = T.toJSON(tree);
+  rec.from_json = attempt(() => T.serialize(T.fromJSON(JSON.parse(JSON.stringify(T.toJSON(tree))))).uri);
+  rec.result_key = T.resultKey(tree);
+  rec.required = tree.required;
+  rec.query = querySet(tree);
   rec.sql = attempt(() => T.toSQL(tree));
   rec.sql_inline = attempt(() => T.toSQL(tree, {inline: true}));
   rec.math = T.toMath(tree, false);
   rec.math_written = T.toMath(tree, true);
-  rec.execute = attempt(() => T.execute(tree));
+  rec.execute = attempt(() => T.execute(tree, {store: T.newStore()}));
   return rec;
 }
 
@@ -66,16 +80,18 @@ write('generated.jsonl.gz', generated);
 // 3. withPulse, chained through parent, over the collection and every 25th generated address.
 const pulseSrc = collection.map(r => r.uri).concat(generated.filter((_, i) => i % 25 === 0).map(r => r.uri));
 const pulse = []; let parent;
-const DEBOUNCES = [undefined, 0, 300, 150];
+const DEBOUNCES = [undefined, 0, 300, 150, null];
+const EXTRA = {undo: ['@!tcxp:/school.demo/sql/delete?from=courses&where=eq(course_id,6)']};
 pulseSrc.forEach((uri, i) => {
   const tree = T.parseURI(uri);
   const step = i + 1;
   const at = new Date(Date.UTC(2026, 9, 1, 12, 0, 0) + i * 1037).toISOString();
-  const debounce = DEBOUNCES[i % 4];
+  const debounce = DEBOUNCES[i % 5];
+  const extra = i % 6 === 2 ? EXTRA : undefined;
   const usedParent = i % 7 === 3 ? undefined : parent;
-  const out = T.withPulse(tree, step, at, debounce, usedParent);
+  const out = T.withPulse(tree, step, at, debounce, usedParent, extra);
   const reparsed = T.parseURI(out);
-  pulse.push({uri, step, at, debounce: debounce === undefined ? null : debounce, parent: usedParent === undefined ? null : usedParent,
+  pulse.push({uri, step, at, debounce: debounce === undefined ? null : debounce, parent: usedParent === undefined ? null : usedParent, extra: extra || null,
     out, out_identity: T.identity(reparsed), out_pulse: reparsed.parsed.meta.find(m => m[0] === 'pulse')[1]});
   parent = T.identity(tree);
 });
@@ -118,13 +134,147 @@ const BAD = [
 ];
 write('errors.jsonl', BAD.map((uri, i) => ({id: 'case-' + i, ...fields(uri)})));
 
+// 4b. v0.2 writes. Each address is previewed (fields), then performed with @ on a fresh store,
+//     then undone with its inverse addresses; restored says the data matches the seed again.
+function writeRecord(uri) {
+  const rec = fields(uri);
+  if (rec.parse) return rec;
+  const st = T.newStore();
+  try { rec.perform = T.execute(T.parseURI(uri.startsWith('@') ? uri : '@' + uri), {store: st}); }
+  catch (e) { rec.perform = errOf(e); rec.changed = T.dataChanged(st); return rec; }
+  rec.changed = T.dataChanged(st);
+  rec.undo = (rec.perform.inverse || []).map(inv => attempt(() => T.execute(T.parseURI(inv), {store: st}).kind));
+  rec.restored = !T.dataChanged(st);
+  return rec;
+}
+const writeQueries = T.QUERIES.filter(q => /\/sql\/(insert|update|delete)\?/.test(q.uri));
+const wgen = new T.FilterGenerator(11);
+const writes = writeQueries.map(q => ({source: 'query', id: q.id, ...writeRecord(q.uri)}));
+for (let i = 0; i < 1000; i++) writes.push({source: 'nextWrite', seed: 11, index: i, ...writeRecord(wgen.nextWrite())});
+write('writes.jsonl.gz', writes);
+
+// 4c. v0.2 edit(): recorded operation lists (generated once here) and their outcomes.
+const EDIT_SEED = 23;
+let ea = EDIT_SEED * 7919;
+const rnd = () => { ea = (ea * 1103515245 + 12345) % 2147483648; return ea / 2147483648; };
+const pick = xs => xs[Math.floor(rnd() * xs.length)];
+const litFor = slot => { const f = slot && slot.type ? T.baseType(slot.type) : 'numeric'; return /int|numeric|bigint|real/.test(f) ? String(1 + Math.floor(rnd() * 5)) : /date|time/.test(f) ? "date'2026-01-15'" : pick(["'x'", "'R&D'", "'100%'", "'a=b'"]); };
+const intentRowsRandom = () => {
+  const rows = [{role: 'user', text: pick(['How many hours?', 'Is it safe & sound?', 'Q3 #2'])}];
+  const n = Math.floor(rnd() * 3);
+  for (let i = 0; i < n; i++) rows.push(Object.assign({role: pick(['manager', 'auditor']), text: 'Rule ' + i, require: pick(['$req_a', '$req_b', ['$req_a', '$req_c']])},
+    rnd() < 0.5 ? {if_empty: pick(['HALT', 'HALT', 'ASK', 'ACT', 'maybe'])} : {}));
+  return rows;
+};
+const randomOp = tree => {
+  const r = rnd();
+  const gaps = T.query(tree, 'gaps').filter(g => g.kind === 'gap' && g.label.startsWith('$'));
+  const bound = Object.keys(tree.parsed.bindings);
+  const leaves = T.query(tree, 'references').concat(T.query(tree, 'variables'));
+  if (r < 0.22 && gaps.length) { const g = pick(gaps); return {op: 'bind', var: g.label.slice(1), value: litFor(T.resolvePointer(tree, g.pointer)[0])}; }
+  if (r < 0.3 && bound.length) return {op: 'unbind', var: pick(bound)};
+  if (r < 0.45) { const vals = T.query(tree, 'variables').concat(T.query(tree, 'operators')); if (vals.length) { const v = pick(vals); return {op: 'replace', path: v.pointer, expr: v.kind === 'operator' ? 'true' : litFor(T.resolvePointer(tree, v.pointer)[0])}; } }
+  if (r < 0.55) return {op: 'remove', path: '/' + pick(Object.keys(tree.parsed.items).concat(['order', 'where', '~intent', '$x']))};
+  if (r < 0.65) return {op: 'add', key: pick(['order', 'where', 'limit', 'returning']), expr: pick(['asc(' + (leaves.length ? pick(leaves).label.replace(/^\$/, '') : 'x') + ')', 'true', '5'])};
+  if (r < 0.75 && leaves.length) return {op: 'annotate', on: [pick(leaves).pointer], meaning: pick([null, 'Edited by the API test', '!tcxp:/registry/notes/equation']), structure: null, environment: null};
+  if (r < 0.85) return {op: 'meta', key: 'intent', value: intentRowsRandom()};
+  if (r < 0.9 && tree.parsed.mode === 'fn') return {op: 'param', name: 'do', value: pick(['team', null, 'R&D'])};
+  return {op: 'meta', key: pick(['outcome', 'observe', 'intent']), value: pick([[{amount: 5, currency: 'USD'}], 'Edited intent & more', null])};
+};
+const edits = [];
+const editCase = (uri, ops, opts) => {
+  let out;
+  try { const r = T.edit(uri, ops, opts); out = {uri: r.uri, identity: T.identity(r.tree), gaps: r.tree.gaps}; } catch (e) { out = errOf(e); }
+  edits.push({uri, ops, opts, out});
+  return out;
+};
+const ecorpus = [...T.QUERIES.map(q => q.uri), ...new T.FilterGenerator(EDIT_SEED).batch(300)];
+ecorpus.forEach((uri, n) => {
+  let cur = uri, tree = T.parseURI(uri);
+  for (let step = 0; step < 4; step++) {
+    const ops = [randomOp(tree)];
+    if (rnd() < 0.3) ops.push(randomOp(tree));
+    const opts = rnd() < 0.2 ? {pulse: false} : {at: '2026-10-04T12:00:0' + step + '.000Z'};
+    const out = editCase(cur, ops, opts);
+    if (out.uri) { cur = out.uri; tree = T.parseURI(cur); }
+  }
+  // intent: a required variable, then bound
+  const req = editCase(uri, [{op: 'meta', key: 'intent', value: [{role: 'manager', text: 'State the reason.', require: '$req_reason', ...(n % 2 ? {if_empty: 'HALT'} : {})}]}], {pulse: false});
+  if (req.uri) editCase(req.uri, [{op: 'bind', var: 'req_reason', value: "'audit'"}], {pulse: false});
+});
+// handwritten edge cases on one address
+const EB = T.QUERIES.find(q => q.id === 'us-hours-gap').uri;
+[
+  [{op: 'nope'}], [null], [{op: 'bind', var: 'tax_year'}], [{op: 'bind', var: '1x', value: '1'}], [{op: 'bind', var: 'other', value: '1'}],
+  [{op: 'bind', var: 'tax_year', value: "'2024'"}], [{op: 'bind', var: 'tax_year', value: '@!tcxp:/school.demo/fn/current_cohort'}],
+  [{op: 'unbind', var: 'tax_year'}], [{op: 'replace', path: 'where/0', expr: 'true'}], [{op: 'replace', path: '/$tax_year', expr: '1'}],
+  [{op: 'replace', path: '/~intent', expr: '1'}], [{op: 'replace', path: '/nope/0', expr: '1'}], [{op: 'replace', path: '/where/9', expr: 'true'}],
+  [{op: 'replace', path: '/where/0/1/0/0', expr: 'true'}], [{op: 'replace', path: '/where/0/9', expr: 'true'}], [{op: 'replace', path: '/where/0', expr: 'eq(('}],
+  [{op: 'replace', path: '/where/0', expr: 'true,false'}], [{op: 'replace', path: '/where', expr: 'true'}], [{op: 'replace', path: '/where/0/1', expr: 'row(1)'}],
+  [{op: 'remove', path: '/where'}], [{op: 'remove', path: '/where/0/0'}], [{op: 'remove', path: '/$nope'}], [{op: 'remove', path: '/~nope'}],
+  [{op: 'remove', path: '/~intent'}], [{op: 'remove', path: '/cols'}], [{op: 'add', key: 'where', expr: 'true'}], [{op: 'add', key: '~x', expr: '1'}],
+  [{op: 'add', key: 'order', expr: 'asc(us_hours)'}, {op: 'add', key: 'order', expr: 'desc(us_hours)'}], [{op: 'add', key: 'limit', expr: '$n'}],
+  [{op: 'annotate', on: ['/nope']}], [{op: 'annotate', on: '/where/0', id: 's1'}], [{op: 'annotate', on: ['/where/0'], id: 's9', meaning: 'm'}],
+  [{op: 'meta', key: 'bad key', value: 1}], [{op: 'meta', key: 'outcome', value: {a: 1, '10': 2}}], [{op: 'meta', key: 'spikes', value: null}],
+  [{op: 'meta', key: 'intent', value: [{role: 'manager', text: 't', require: '$tax_year', if_empty: 'ASK'}]}],
+  [{op: 'param', name: 'do', value: 'x'}]
+].forEach(ops => editCase(EB, ops, {at: '2026-10-04T14:00:00.000Z'}));
+[[{op: 'param', name: 'do', value: 'R&D=1'}], [{op: 'param', name: 'nope', value: 'x'}], [{op: 'param', name: 'do', value: null}], [{op: 'replace', path: '/do/0', expr: "'y'"}]]
+  .forEach(ops => editCase('@!tcxp:/registry/hello?do=world', ops, {at: '2026-10-04T14:00:00.000Z'}));
+editCase(T.QUERIES.find(q => q.id === 'write-update-bound').uri, [{op: 'add', key: 'set', expr: "assign(cohort,'x')"}], {pulse: false});
+editCase(T.QUERIES.find(q => q.id === 'write-update-bound').uri, [{op: 'remove', path: '/where'}], {pulse: false});
+write('edits.jsonl.gz', edits);
+
+// 4d. v0.2 registerCSV: each case registers, records the table, runs select *, then removes what it added.
+const CSV_CASES = [
+  ['csvtest.demo', 'people', 'Name,"Amount, USD",Joined,Note\n"Ada, Countess",12.50,2024-01-31,"She said ""hi"""\nBob,3,2024-02-29,\nCleo,,2023-12-01,plain\n', null],
+  ['csvtest.demo', 'bad', 'a,b\n1,2,3\n', null],
+  ['csvtest.demo', 'Bad-Name', 'a\n1\n', null],
+  ['csvtest.demo', 'only_header', 'a,b\n', null],
+  ['csvtest.demo', 'dup', 'a,A\n1,2\n', null],
+  ['csvtest.demo', 'rowid', 'row_id,b\n1,2\n', null],
+  ['csvtest.demo', 'crlf', 'x,y\r\n1,2024-02-30\r\n-3,2024-02-28\r\n\r\n', null],
+  ['csvtest.demo', 'quoted_nl', 'a,b\n"line1\nline2",2\n  spaced  , 4.0 \n', null],
+  ['csvtest.demo', 'typed', 'hours,day\n1.5,2024-01-01\n2,2024-01-02\n', {hours: 'numeric(6,2)', day: 'text'}],
+  ['csvtest.demo', 'typed_bad', 'n\nabc\n', {n: 'integer'}],
+  ['csvtest.demo', 'typed_date', 'd\n2024-13-01\n', {d: 'date'}],
+  ['csvtest.demo', 'odd_headers', ' Hello World ,__x__,%%%,Ünï\n1,2,3,4\n', null],
+  ['csvtest.demo', 'zero_years', 'd\n0024-01-01\n1999-12-31\n', null],
+  ['csvtest.demo', 'big', 'n,m\n12345678901234567890,1e3\n-0,007\n', null],
+  ['client.demo', 'extra', 'a\n1\n', null],
+  ['constructor', 'constructor', 'a,b\n1,x\n', null],
+  ['__proto__', '__proto__', 'a,b\n1,x\n', null],
+  ['toString', 'valueof', 'a,b\n1,x\n', null]
+];
+const csv = CSV_CASES.map(([reg, table, text, types]) => {
+  const existed = Object.hasOwn(T.REGISTRIES, reg);
+  const rec = {registry: reg, table, csv: text, types};
+  try {
+    rec.def = T.registerCSV(reg, table, text, types || undefined);
+    rec.seed = T.REGISTRIES[reg].db.seed[table];
+    rec.registry_after = (r => ({title: r.title, description: r.description, tables: r.db.schema.tables.map(t => t.name)}))(T.REGISTRIES[reg]);
+    rec.ddl = T.fullDDL(reg);
+    rec.select = attempt(() => T.execute(T.parseURI('!tcxp:/' + reg + '/sql/select?cols=*&from=' + table + '&order=asc(row_id)'), {store: T.newStore()}));
+  } catch (e) { rec.error = errOf(e); }
+  if (!existed) delete T.REGISTRIES[reg];
+  else if (rec.def) { const db = T.REGISTRIES[reg].db; db.schema.tables = db.schema.tables.filter(t => t.name !== table); delete db.seed[table]; }
+  return rec;
+});
+write('csv.jsonl', csv);
+
+// 4e. v0.2: JavaScript-special names in every position behave like ordinary unknown names.
+const {NAMES, nameCases} = await import('../../test/names-cases.mjs');
+const names = [];
+for (const n of NAMES.concat(['plain_name'])) for (const [where, uri] of nameCases(n)) names.push({name: n, position: where, ...fields(uri)});
+write('names.jsonl', names);
+
 // 5. Constants and data: everything the Python package must carry unchanged.
 const registries = {};
 for (const [name, reg] of Object.entries(T.REGISTRIES)) {
   registries[name] = {title: reg.title, description: reg.description, db: reg.db || null, notes: reg.notes,
     fns: Object.fromEntries(Object.entries(reg.fns).map(([p, f]) => [p, {params: f.params, returns: f.returns, doc: f.doc}]))};
 }
-const constants = {registries, queries: T.QUERIES, groups: T.GROUPS, coverage: T.COVERAGE, ops: T.OPS, clauses: T.CLAUSES,
+const constants = {registries, queries: T.QUERIES, write_clauses: T.WRITE_CLAUSES, write_order: T.WRITE_ORDER, groups: T.GROUPS, coverage: T.COVERAGE, ops: T.OPS, clauses: T.CLAUSES,
   clause_order: T.CLAUSE_ORDER, rules: T.RULES, facets: T.FACETS, scheme: T.SCHEME, debounce_ms: T.DEBOUNCE_MS,
   ddl: Object.fromEntries(Object.keys(T.REGISTRIES).filter(r => T.REGISTRIES[r].db).map(r => [r, T.fullDDL(r)])),
   base_type: ['numeric(3,2)', 'integer', 'text', null, 'varchar(10)', 'a(b)(c)'].map(t => [t, T.baseType(t) === undefined ? null : T.baseType(t)])};

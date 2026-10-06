@@ -26,10 +26,21 @@ function py(v, ind = '') {
   return '{\n' + keys.map(k => inner + JSON.stringify(k) + ': ' + py(v[k], inner)).join(',\n') + ',\n' + ind + '}';
 }
 
+// CSV-backed registries (src/data_csv.js) are rebuilt in Python by register_csv at import, exactly as
+// tcxp.js builds them, so they are exported as their CSV source rather than as finished tables.
+const csvSrc = fs.readFileSync(new URL('../../src/data_csv.js', import.meta.url), 'utf8');
+const literal = (re, what) => { const m = re.exec(csvSrc); if (!m) throw new Error('data_csv.js: cannot find ' + what); return m[1]; };
+const CLIENT_CSV = literal(/const CLIENT_CSV = `([^`]*)`;/, 'CLIENT_CSV');
+const clientBase = new Function('return ' + literal(/REGISTRIES\['client\.demo'\] = (\{[\s\S]*?\}\});/, "REGISTRIES['client.demo']"))();
+const clientTypes = new Function('return ' + literal(/registerCSV\('client\.demo', 'client_hours', CLIENT_CSV, (\{[^}]*\})\);/, 'registerCSV call'))();
+const CSV_SOURCES = [['client.demo', 'client_hours', CLIENT_CSV, clientTypes]];
+const csvBuilt = new Set(CSV_SOURCES.map(c => c[0]));
+
 // Registries without their JS functions; the Python module attaches its own implementations.
 const registries = {};
 for (const [name, reg] of Object.entries(T.REGISTRIES)) {
   const r = {title: reg.title, description: reg.description};
+  if (csvBuilt.has(name)) { registries[name] = {title: clientBase.title, description: clientBase.description, fns: {}, notes: clientBase.notes}; continue; }
   if (reg.db) r.db = {schema: reg.db.schema, seed: reg.db.seed};
   r.fns = {};
   for (const [path, f] of Object.entries(reg.fns)) r.fns[path] = {params: f.params, returns: f.returns, doc: f.doc};
@@ -46,6 +57,8 @@ const out = [
   '',
   'QUERIES: List[Dict[str, Any]] = ' + py(T.QUERIES),
   '',
+  'CSV_SOURCES: List[List[Any]] = ' + py(CSV_SOURCES),
+  '',
   'GROUPS: List[List[str]] = ' + py(T.GROUPS),
   '',
   'COVERAGE: List[List[Any]] = ' + py(T.COVERAGE),
@@ -55,6 +68,10 @@ const out = [
   'CLAUSES: Dict[str, Dict[str, Any]] = ' + py(T.CLAUSES),
   '',
   'CLAUSE_ORDER: List[str] = ' + py(T.CLAUSE_ORDER),
+  '',
+  'WRITE_CLAUSES: Dict[str, Dict[str, Dict[str, Any]]] = ' + py(T.WRITE_CLAUSES),
+  '',
+  'WRITE_ORDER: Dict[str, List[str]] = ' + py(T.WRITE_ORDER),
   '',
   'RULES: List[List[str]] = ' + py(T.RULES),
   '',

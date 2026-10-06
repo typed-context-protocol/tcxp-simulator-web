@@ -1,7 +1,7 @@
 # Release: a version tag (v0.1.0) builds both packages from the same commit, runs every test,
 # and publishes to TestPyPI, then (after manual approval) to npm and PyPI.
 #
-# Nothing is published unless every test passes. The npm and pypi environments require a reviewer,
+# Nothing is published unless every test passes: the JS gate, the Python tests and the Lean proofs. The npm and pypi environments require a reviewer,
 # so the real publishes wait for a person to press "Approve" in the run page.
 # npm name is @tcxp/tcxp (npm refused unscoped "tcxp" as too similar to tap/tmp/tsx); PyPI is "tcxp".
 # @tcxp/tcxp 0.1.0 was published to npm by hand (npm trusted publishing needs the package to exist);
@@ -37,13 +37,30 @@ jobs:
           echo "tag=$TAG npm=$NPM python=$PY"
           test "$TAG" = "$NPM" && test "$TAG" = "$PY"
       - run: npm ci
-      - name: npm run gate (PostgreSQL verify + fuzz)
-        run: npm run gate
+      - name: npm run gate:js (the gate without Lean; the lean job checks the proofs)
+        run: npm run gate:js
       - name: Python data and vectors match tcxp.js
         run: |
           node python/tools/gen_data.mjs
           node python/tools/export_vectors.mjs
           git diff --exit-code -- python/
+          test -z "$(git status --porcelain -- python/)" || { git status --porcelain -- python/; exit 1; }
+
+  lean:
+    name: Lean proofs (Lean 4.19.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lean 4.19.0 with elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain leanprover/lean4:v4.19.0
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - run: lean --version
+      - name: lean lean/Tcxp.lean (every theorem checks, no sorry)
+        shell: bash
+        run: |
+          lean lean/Tcxp.lean 2>&1 | tee lean.log
+          if grep -q "sorry" lean.log; then echo "a proof uses sorry"; exit 1; fi
 
   python-tests:
     name: Python tests (${{ matrix.python }})
@@ -74,7 +91,7 @@ jobs:
 
   build:
     name: Build both packages
-    needs: [gate, python-tests]
+    needs: [gate, python-tests, lean]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

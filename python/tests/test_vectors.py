@@ -26,7 +26,7 @@ def _lines(name: str) -> List[str]:
 
 
 def _err(e: BaseException) -> Dict[str, Any]:
-    return {'error': str(e), 'type': type(e).__name__, 'where': getattr(e, 'where', None)}
+    return {'error': str(e), 'type': type(e).__name__, 'where': getattr(e, 'where', None), 'code': getattr(e, 'code', None)}
 
 
 def _attempt(f: Callable[[], Any]) -> Any:
@@ -34,6 +34,23 @@ def _attempt(f: Callable[[], Any]) -> Any:
         return f()
     except Exception as e:  # noqa: BLE001 - recorded, like the JS exporter
         return _err(e)
+
+
+def _query_set(tree: Dict[str, Any]) -> List[Any]:
+    sels = ['gaps', 'variables', 'references', 'operators', 'annotations', 'operators:eq', 'references:', 'pointer:/nope']
+    labels: List[str] = []
+    for r in tcxp.query(tree, 'references'):
+        if r['label'] not in labels:
+            labels.append(r['label'])
+    sels += ['references:' + label for label in labels]
+    nodes = tcxp.query(tree, 'variables') + tcxp.query(tree, 'operators')
+    if nodes:
+        sels.append('pointer:' + nodes[0]['pointer'])
+    return [[sel, _attempt(lambda sel=sel: tcxp.query(tree, sel))] for sel in sels]
+
+
+def _json_roundtrip(v: Any) -> Any:
+    return json.loads(stringify(v))
 
 
 def fields(uri: str) -> Dict[str, Any]:
@@ -56,11 +73,15 @@ def fields(uri: str) -> Dict[str, Any]:
                       'facets': s['facets'], 'targets': [{'ptr': t['ptr'], 'count': len(t['nodes'])} for t in s['targets']]}
                      for s in tree['spikes']]
     rec['json'] = tcxp.to_json(tree)
+    rec['from_json'] = _attempt(lambda: tcxp.serialize(tcxp.from_json(_json_roundtrip(tcxp.to_json(tree))))['uri'])
+    rec['result_key'] = tcxp.result_key(tree)
+    rec['required'] = tree['required']
+    rec['query'] = _query_set(tree)
     rec['sql'] = _attempt(lambda: tcxp.to_sql(tree))
     rec['sql_inline'] = _attempt(lambda: tcxp.to_sql(tree, inline=True))
     rec['math'] = tcxp.to_math(tree, False)
     rec['math_written'] = tcxp.to_math(tree, True)
-    rec['execute'] = _attempt(lambda: tcxp.execute(tree))
+    rec['execute'] = _attempt(lambda: tcxp.execute(tree, store=tcxp.new_store()))
     return rec
 
 
@@ -114,9 +135,10 @@ def test_errors() -> None:
 def test_pulse() -> None:
     def build(exp: Dict[str, Any], i: int) -> Dict[str, Any]:
         tree = tcxp.parse_uri(exp['uri'])
-        out = tcxp.with_pulse(tree, exp['step'], exp['at'], exp['debounce'], exp['parent'])
+        out = tcxp.with_pulse(tree, exp['step'], exp['at'], exp['debounce'], exp['parent'], exp['extra'])
         reparsed = tcxp.parse_uri(out)
         return {'uri': exp['uri'], 'step': exp['step'], 'at': exp['at'], 'debounce': exp['debounce'], 'parent': exp['parent'],
+                'extra': exp['extra'],
                 'out': out, 'out_identity': tcxp.identity(reparsed),
                 'out_pulse': next(m for m in reparsed['parsed']['meta'] if m[0] == 'pulse')[1]}
     _check('pulse.jsonl', build)
@@ -136,7 +158,7 @@ def test_constants() -> None:
     for name, reg in tcxp.REGISTRIES.items():
         registries[name] = {'title': reg['title'], 'description': reg['description'], 'db': reg.get('db'), 'notes': reg['notes'],
                             'fns': {p: {'params': f['params'], 'returns': f['returns'], 'doc': f['doc']} for p, f in reg['fns'].items()}}
-    actual = {'registries': registries, 'queries': tcxp.QUERIES, 'groups': tcxp.GROUPS, 'coverage': tcxp.COVERAGE,
+    actual = {'registries': registries, 'queries': tcxp.QUERIES, 'write_clauses': tcxp.WRITE_CLAUSES, 'write_order': tcxp.WRITE_ORDER, 'groups': tcxp.GROUPS, 'coverage': tcxp.COVERAGE,
               'ops': tcxp.OPS, 'clauses': tcxp.CLAUSES, 'clause_order': tcxp.CLAUSE_ORDER, 'rules': tcxp.RULES,
               'facets': tcxp.FACETS, 'scheme': tcxp.SCHEME, 'debounce_ms': tcxp.DEBOUNCE_MS,
               'ddl': {r: tcxp.full_ddl(r) for r in tcxp.REGISTRIES if tcxp.REGISTRIES[r].get('db')},
@@ -144,6 +166,75 @@ def test_constants() -> None:
     for k in exp:
         assert stringify(actual[k]) == stringify(exp[k]), k
     assert stringify(actual) == _lines('constants.json')[0]
+
+
+def _write_record(uri: str) -> Dict[str, Any]:
+    rec = fields(uri)
+    if 'parse' in rec:
+        return rec
+    st = tcxp.new_store()
+    try:
+        rec['perform'] = tcxp.execute(tcxp.parse_uri(uri if uri.startswith('@') else '@' + uri), store=st)
+    except Exception as e:  # noqa: BLE001
+        rec['perform'] = _err(e)
+        rec['changed'] = tcxp.data_changed(st)
+        return rec
+    rec['changed'] = tcxp.data_changed(st)
+    rec['undo'] = [_attempt(lambda inv=inv: tcxp.execute(tcxp.parse_uri(inv), store=st)['kind']) for inv in rec['perform'].get('inverse') or []]
+    rec['restored'] = not tcxp.data_changed(st)
+    return rec
+
+
+def test_writes() -> None:
+    gen = tcxp.FilterGenerator(11)
+
+    def build(exp: Dict[str, Any], i: int) -> Dict[str, Any]:
+        if exp['source'] == 'query':
+            q = next(q for q in tcxp.QUERIES if q['id'] == exp['id'])
+            return {'source': 'query', 'id': exp['id'], **_write_record(q['uri'])}
+        return {'source': 'nextWrite', 'seed': 11, 'index': exp['index'], **_write_record(gen.next_write())}
+    _check('writes.jsonl.gz', build)
+
+
+def test_edits() -> None:
+    def build(exp: Dict[str, Any], i: int) -> Dict[str, Any]:
+        opts = exp['opts'] or {}
+        try:
+            r = tcxp.edit(exp['uri'], exp['ops'], pulse=opts.get('pulse', True) is not False, at=opts.get('at'))
+            out = {'uri': r['uri'], 'identity': tcxp.identity(r['tree']), 'gaps': r['tree']['gaps']}
+        except Exception as e:  # noqa: BLE001
+            out = _err(e)
+        return {'uri': exp['uri'], 'ops': exp['ops'], 'opts': exp['opts'], 'out': out}
+    _check('edits.jsonl.gz', build)
+
+
+def test_csv() -> None:
+    def build(exp: Dict[str, Any], i: int) -> Dict[str, Any]:
+        reg, table = exp['registry'], exp['table']
+        existed = reg in tcxp.REGISTRIES
+        rec: Dict[str, Any] = {'registry': reg, 'table': table, 'csv': exp['csv'], 'types': exp['types']}
+        try:
+            rec['def'] = tcxp.register_csv(reg, table, exp['csv'], exp['types'])
+            rec['seed'] = tcxp.REGISTRIES[reg]['db']['seed'][table]
+            r = tcxp.REGISTRIES[reg]
+            rec['registry_after'] = {'title': r['title'], 'description': r['description'], 'tables': [t['name'] for t in r['db']['schema']['tables']]}
+            rec['ddl'] = tcxp.full_ddl(reg)
+            rec['select'] = _attempt(lambda: tcxp.execute(tcxp.parse_uri('!tcxp:/' + reg + '/sql/select?cols=*&from=' + table + '&order=asc(row_id)'),
+                                                          store=tcxp.new_store()))
+        except Exception as e:  # noqa: BLE001
+            rec['error'] = _err(e)
+        if not existed:
+            tcxp.REGISTRIES.pop(reg, None)
+        elif 'def' in rec:
+            db = tcxp.REGISTRIES[reg]['db']
+            db['schema']['tables'] = [t for t in db['schema']['tables'] if t['name'] != table]
+            db['seed'].pop(table, None)
+        return rec
+    _check('csv.jsonl', build)
+
+
+def test_names() -> None:
+    _check('names.jsonl', lambda exp, i: {'name': exp['name'], 'position': exp['position'], **fields(exp['uri'])})
 
 
 @pytest.mark.parametrize('seed', [1, 7, 42, -3, 2 ** 31, 0])

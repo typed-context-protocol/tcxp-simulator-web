@@ -281,6 +281,14 @@ REGISTRIES_DATA: Dict[str, Any] = {
             "notes/equation": "A linear equation in one unknown, x. It holds when x = 3.",
         },
     },
+    "client.demo": {
+        "title": "Client file",
+        "description": "A client CSV of work hours, loaded with registerCSV.",
+        "fns": {},
+        "notes": {
+            "rules/tax-year": "Before submitting, the user must state the tax year they are referencing.",
+        },
+    },
 }
 
 QUERIES: List[Dict[str, Any]] = [
@@ -444,6 +452,161 @@ QUERIES: List[Dict[str, Any]] = [
         "uri": "!tcxp:/firm.demo/sql/select?cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'",
         "ref": "SELECT extract(year from work_logs.worked_on) AS calendar_year, projects.fiscal_year, sum(work_logs.hours) AS us_hours FROM work_logs INNER JOIN projects ON projects.project_id = work_logs.project_id WHERE work_logs.work_country = 'US' GROUP BY extract(year from work_logs.worked_on), projects.fiscal_year ORDER BY calendar_year ASC, projects.fiscal_year ASC",
     },
+    {
+        "id": "write-insert-one",
+        "group": "writes",
+        "title": "Add a course (insert one row)",
+        "intent": "Add the new Data Visualization course, DS310, worth 3 credits.",
+        "uri": "!tcxp:/school.demo/sql/insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3",
+        "ref": "INSERT INTO courses (course_id, code, title, department, credits) VALUES (6, 'DS310', 'Data Visualization', 'DS', 3) RETURNING *",
+    },
+    {
+        "id": "write-insert-many",
+        "group": "writes",
+        "title": "Enroll a student in two courses (insert several rows)",
+        "intent": "Enroll Hannah Weiss in CS101 and DS210 today.",
+        "uri": "!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,$student,1,$today,'active'),row(22,$student,3,$today,'active')&returning=enrollment_id,course_id&$student=5&$today=date'2026-10-04'",
+        "ref": "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 5, 1, DATE '2026-10-04', 'active'), (22, 5, 3, DATE '2026-10-04', 'active') RETURNING enrollment_id, course_id",
+    },
+    {
+        "id": "write-update-bound",
+        "group": "writes",
+        "title": "Record a new GPA (update with bound variables)",
+        "intent": "Record Noah Kim's new GPA of 3.15.",
+        "uri": "!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8",
+        "ref": "UPDATE students SET gpa = 3.15 WHERE student_id = 8 RETURNING student_id, first_name, gpa",
+    },
+    {
+        "id": "write-update-call",
+        "group": "writes",
+        "title": "Move a student to the open cohort (update bound by a call)",
+        "intent": "Move Priya Nair into the cohort that is open for enrollment now.",
+        "uri": "!tcxp:/school.demo/sql/update?table=students&set=assign(cohort,$cohort)&where=eq(student_id,3)&returning=student_id,cohort&$cohort=@!tcxp:/school.demo/fn/current_cohort",
+        "ref": "UPDATE students SET cohort = '2026-fall' WHERE student_id = 3 RETURNING student_id, cohort",
+    },
+    {
+        "id": "write-delete-where",
+        "group": "writes",
+        "title": "Delete low late submissions (delete with where)",
+        "intent": "Delete the late submissions that scored under 60.",
+        "uri": "!tcxp:/school.demo/sql/delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60",
+        "ref": "DELETE FROM submissions WHERE status = 'late' AND score < 60 RETURNING submission_id, score",
+    },
+    {
+        "id": "write-update-expr",
+        "group": "writes",
+        "title": "Add half an hour to a work log (update with an expression)",
+        "intent": "Add half an hour to Ana Ruiz's work log for May 20, 2024.",
+        "uri": "!tcxp:/firm.demo/sql/update?table=work_logs&set=assign(hours,add(hours,$extra))&where=eq(log_id,2)&returning=log_id,hours&$extra=0.5",
+        "ref": "UPDATE work_logs SET hours = hours + 0.5 WHERE log_id = 2 RETURNING log_id, hours",
+    },
+    {
+        "id": "write-delete-all",
+        "group": "writes",
+        "title": "Clear every submission on purpose (where=true)",
+        "intent": "Clear every submission. Yes, all of them.",
+        "uri": "!tcxp:/school.demo/sql/delete?from=submissions&where=true&returning=submission_id",
+        "ref": "DELETE FROM submissions WHERE true RETURNING submission_id",
+    },
+    {
+        "id": "write-update-gap",
+        "group": "writes",
+        "title": "Set a GPA, value missing (gap blocks the write)",
+        "intent": "Set Maya Chen's GPA.",
+        "uri": "!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,1)",
+        "ref": None,
+    },
+    {
+        "id": "write-delete-no-where",
+        "group": "writes",
+        "title": "Delete with no where (refused)",
+        "intent": "Delete every submission.",
+        "uri": "!tcxp:/school.demo/sql/delete?from=submissions",
+        "ref": None,
+    },
+    {
+        "id": "write-fk-violation",
+        "group": "writes",
+        "title": "Enroll a student who does not exist (foreign key error)",
+        "intent": "Enroll student 99 in CS101.",
+        "uri": "!tcxp:/school.demo/sql/insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')",
+        "ref": "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 99, 1, DATE '2026-10-04', 'active')",
+    },
+    {
+        "id": "csv-us-hours-2024",
+        "group": "csv",
+        "title": "US hours in the client CSV, tax year 2024",
+        "intent": "What are the US hours worked in my client CSV in 2024?",
+        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024",
+        "ref": "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024",
+    },
+    {
+        "id": "csv-hours-by-employee",
+        "group": "csv",
+        "title": "Hours per person in the client CSV",
+        "intent": "How many hours did each person log, and where?",
+        "uri": "!tcxp:/client.demo/sql/select?cols=employee,work_country,as(sum(hours),total_hours),as(count(*),days)&from=client_hours&group=employee,work_country&order=asc(employee),asc(work_country)",
+        "ref": "SELECT employee, work_country, sum(hours) AS total_hours, count(*) AS days FROM client_hours GROUP BY employee, work_country ORDER BY employee ASC, work_country ASC",
+    },
+    {
+        "id": "csv-insert-row",
+        "group": "csv",
+        "title": "Add a day to the client CSV (write)",
+        "intent": "Add a 6-hour US day for Ana Ruiz on 2025-10-01.",
+        "uri": "!tcxp:/client.demo/sql/insert?into=client_hours&cols=row_id,employee,date,hours,work_country&values=row(23,$who,$day,6,'US')&returning=*&$who='Ana Ruiz'&$day=date'2025-10-01'",
+        "ref": "INSERT INTO client_hours (row_id, employee, date, hours, work_country) VALUES (23, 'Ana Ruiz', DATE '2025-10-01', 6, 'US') RETURNING *",
+    },
+    {
+        "id": "intent-halt",
+        "group": "intent",
+        "title": "US hours: halts until the tax year is stated",
+        "intent": "What are the US hours worked in my client CSV?",
+        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&~intent=[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\",\"if_empty\":\"HALT\"}]",
+        "ref": None,
+    },
+    {
+        "id": "intent-answered",
+        "group": "intent",
+        "title": "US hours: tax year given, it runs",
+        "intent": "What are the US hours worked in my client CSV? (2024)",
+        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024&~intent=[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\",\"if_empty\":\"HALT\"}]",
+        "ref": "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024",
+    },
+    {
+        "id": "intent-require-only",
+        "group": "intent",
+        "title": "Required even though the query never uses it",
+        "intent": "What are the US hours worked in my client CSV, all years?",
+        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=eq(work_country,'US')&~intent=[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\",\"if_empty\":\"HALT\"}]",
+        "ref": None,
+    },
+    {
+        "id": "intent-require-only-bound",
+        "group": "intent",
+        "title": "Required, bound, and the query runs unchanged",
+        "intent": "What are the US hours worked in my client CSV, all years? (tax year 2024 stated)",
+        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=eq(work_country,'US')&$tax_year=2024&~intent=[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\",\"if_empty\":\"HALT\"}]",
+        "ref": "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US'",
+    },
+    {
+        "id": "intent-halt-implied",
+        "group": "intent",
+        "title": "if_empty omitted: HALT is the default",
+        "intent": "What are the US hours worked in my client CSV?",
+        "uri": "!tcxp:/client.demo/sql/select?cols=as(sum(hours),us_hours)&from=client_hours&where=eq(work_country,'US')&~intent=[{\"role\":\"user\",\"text\":\"What are the US hours worked in my client CSV?\"},{\"role\":\"manager\",\"text\":\"Before submitting, the user must state the tax year they are referencing.\",\"require\":\"$tax_year\"}]",
+        "ref": None,
+    },
+]
+
+CSV_SOURCES: List[List[Any]] = [
+    [
+        "client.demo",
+        "client_hours",
+        "employee,date,hours,work_country\nAna Ruiz,2024-02-12,5,US\nAna Ruiz,2024-03-11,8,US\nAna Ruiz,2024-05-20,6.5,US\nBen Carter,2024-06-03,7,US\nChen Wei,2024-06-10,8,CA\nDivya Rao,2024-04-15,7.5,IN\nAna Ruiz,2024-08-05,8,US\nBen Carter,2024-09-16,8,US\nChen Wei,2024-10-07,6,US\nErik Lund,2024-11-12,5,DE\nFatima Noor,2024-12-02,7.25,US\nFatima Noor,2024-12-30,3.5,US\nAna Ruiz,2025-01-13,8,US\nBen Carter,2025-02-24,4,US\nDivya Rao,2025-03-10,8,US\nFatima Noor,2025-04-21,6,US\nErik Lund,2025-05-05,8,DE\nChen Wei,2025-06-16,7,CA\nAna Ruiz,2025-07-14,8,US\nBen Carter,2025-08-18,7.5,US\nFatima Noor,2025-09-08,8,US\nDivya Rao,2025-09-22,6,IN",
+        {
+            "hours": "numeric(6,2)",
+        },
+    ],
 ]
 
 GROUPS: List[List[str]] = [
@@ -454,6 +617,9 @@ GROUPS: List[List[str]] = [
     ["calls", "Calls"],
     ["math", "Math and decisions"],
     ["tax", "Firm · tax hours"],
+    ["writes", "Writes"],
+    ["csv", "Client CSV"],
+    ["intent", "Intent rows"],
 ]
 
 COVERAGE: List[List[Any]] = [
@@ -486,6 +652,9 @@ COVERAGE: List[List[Any]] = [
     ["Math", "Arithmetic and comparison in math/eval", "yes", "!tcxp:/registry/math/eval?expr=eq(add(mul(2,$x),3),9)&$x=3&~intent=Is 2x + 3 = 9 true when x = 3?&~spikes=[{\"id\":\"s1\",\"on\":[\"/expr/0/0/0\"],\"meaning\":\"!tcxp:/registry/notes/implicit-mul\",\"structure\":\"!tcxp:/registry/rules/implicit-mul\",\"environment\":null}]"],
     ["Calls", "@ call to a registry function", "yes", "@!tcxp:/registry/hello?do=world"],
     ["Annotations", "~spikes pointing at nodes, facets lit or dark", "yes", "!tcxp:/fleet.demo/math/eval?expr=lt($water_temp,$freezing_point)&$water_temp=29&~intent=The water is 29 °F. Will the sea ice up?&~spikes=[{\"id\":\"s1\",\"on\":[\"/$water_temp\"],\"meaning\":\"!tcxp:/fleet.demo/notes/water-temp\",\"structure\":\"!tcxp:/fleet.demo/rules/water-temp\",\"environment\":null},{\"id\":\"s2\",\"on\":[\"/$freezing_point\"],\"meaning\":\"!tcxp:/fleet.demo/notes/freezing-point\",\"structure\":null,\"environment\":\"!tcxp:/fleet.demo/env/sea-route\"}]"],
+    ["Writes", "INSERT … VALUES … RETURNING", "yes", "!tcxp:/school.demo/sql/insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3"],
+    ["Writes", "UPDATE … SET … WHERE … RETURNING", "yes", "!tcxp:/school.demo/sql/update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8"],
+    ["Writes", "DELETE FROM … WHERE … RETURNING", "yes", "!tcxp:/school.demo/sql/delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60"],
     ["Joins", "Table aliases (FROM students s)", "no", None],
     ["Projection", "SELECT DISTINCT", "no", None],
     ["Aggregation", "count(DISTINCT x)", "no", None],
@@ -495,7 +664,6 @@ COVERAGE: List[List[Any]] = [
     ["Composition", "Common table expressions (WITH)", "no", None],
     ["Analytics", "Window functions (OVER, PARTITION BY)", "no", None],
     ["Expressions", "Casts (::type)", "no", None],
-    ["Writes", "INSERT / UPDATE / DELETE", "no", None],
     ["Schema", "CREATE / ALTER / DROP", "no", None],
     ["Variables", "List-valued variables (IN $ids)", "no", None],
     ["Calls", "Calls with arguments nested inside expressions", "no", None],
@@ -733,6 +901,20 @@ OPS: Dict[str, Dict[str, Any]] = {
         "kind": "join",
         "arity": [1, 1],
     },
+    "row": {
+        "sql": "ROW",
+        "kind": "row",
+        "arity": [1, None],
+        "label": "ROW",
+        "write": True,
+    },
+    "assign": {
+        "sql": "=",
+        "kind": "assign",
+        "arity": [2, 2],
+        "label": ":=",
+        "write": True,
+    },
 }
 
 CLAUSES: Dict[str, Dict[str, Any]] = {
@@ -771,10 +953,64 @@ CLAUSES: Dict[str, Dict[str, Any]] = {
 
 CLAUSE_ORDER: List[str] = ["cols", "from", "join", "where", "group", "having", "order", "limit", "offset"]
 
+WRITE_CLAUSES: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "insert": {
+        "into": {
+            "label": "INSERT INTO",
+        },
+        "cols": {
+            "label": "COLUMNS",
+            "list": True,
+        },
+        "values": {
+            "label": "VALUES",
+            "list": True,
+        },
+        "returning": {
+            "label": "RETURNING",
+            "list": True,
+        },
+    },
+    "update": {
+        "table": {
+            "label": "UPDATE",
+        },
+        "set": {
+            "label": "SET",
+            "list": True,
+        },
+        "where": {
+            "label": "WHERE",
+        },
+        "returning": {
+            "label": "RETURNING",
+            "list": True,
+        },
+    },
+    "delete": {
+        "from": {
+            "label": "DELETE FROM",
+        },
+        "where": {
+            "label": "WHERE",
+        },
+        "returning": {
+            "label": "RETURNING",
+            "list": True,
+        },
+    },
+}
+
+WRITE_ORDER: Dict[str, List[str]] = {
+    "insert": ["into", "cols", "values", "returning"],
+    "update": ["table", "set", "where", "returning"],
+    "delete": ["from", "where", "returning"],
+}
+
 RULES: List[List[str]] = [
     ["scheme", "Starts with !tcxp:/ (an address) or @!tcxp:/ (a call)"],
     ["meta-last", "Every ~meta key comes after every other key"],
-    ["call-target", "@ is only used on a function address"],
+    ["call-target", "@ is only used on a function address or a write"],
     ["grammar", "Parses under the profile grammar with no errors"],
     ["canonical", "Re-serializes to exactly the same string"],
 ]
