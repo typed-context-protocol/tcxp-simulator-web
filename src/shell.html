@@ -133,7 +133,7 @@ a.btn { color: inherit; text-decoration: none; }
 .diags { list-style: none; margin: 0; padding: 0 14px 12px; display: flex; flex-direction: column; gap: 6px; }
 .diags:empty { display: none; }
 .diag { font-size: 13px; padding: 6px 10px; border-radius: 6px; }
-.diag.error { background: var(--bad-bg); color: var(--bad); }
+.diag.error, .diag.refused { background: var(--bad-bg); color: var(--bad); }
 .diag.warn { background: var(--warn-bg); color: var(--warn); }
 .diag.gap { background: var(--gap-fill); color: var(--gap-ink); }
 .diag.info { background: var(--sel); color: var(--ink-2); }
@@ -163,6 +163,15 @@ a.btn { color: inherit; text-decoration: none; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend .dash { width: 18px; border-top: 2px dashed var(--var-line); }
+.find { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--line); }
+.find label { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.find input { flex: 1; min-width: 0; border: 1px solid var(--line-2); border-radius: 6px; padding: 5px 9px; background: var(--panel); color: var(--ink); font: 13px var(--font-code); }
+.find-results { list-style: none; margin: 0; padding: 0 14px 10px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
+.find-results li { display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; cursor: default; }
+.find-results li:hover { border-color: var(--accent); background: var(--sel); }
+.find-results li code { font-family: var(--font-code); color: var(--ink-3); }
+.find-results li.none { border: 0; padding: 3px 0; color: var(--ink-3); }
+.find-results li.err { border: 0; padding: 3px 0; color: var(--bad); }
 .legend b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 .empty-tree { padding: 32px 16px; text-align: center; color: var(--ink-3); }
 
@@ -222,6 +231,15 @@ table.grid tr:last-child td { border-bottom: 0; }
 table.grid td.num { text-align: right; }
 table.grid td.null { color: var(--ink-3); font-style: italic; }
 table.grid td.wrap { white-space: normal; min-width: 240px; }
+table.grid.changes tr.ins td { background: var(--ok-bg); }
+table.grid.changes tr.del td { background: var(--bad-bg); text-decoration: line-through; text-decoration-color: var(--bad); }
+table.grid.changes td.chg { background: var(--warn-bg); }
+table.grid.changes td.chg s { color: var(--ink-3); }
+.write-note { padding: 12px 14px; font-size: 14px; border-bottom: 1px solid var(--line); }
+.write-note.ok { background: var(--ok-bg); color: var(--ok); }
+.sub-h { padding: 10px 14px 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); border-top: 1px solid var(--line); }
+ul.inverse { margin: 0; padding: 0 14px 10px 32px; font-size: 12px; }
+ul.inverse code { font-family: var(--font-code); word-break: break-all; }
 .status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
 .pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
 .pill.ok { background: var(--ok-bg); color: var(--ok); }
@@ -309,7 +327,7 @@ table.grid td.wrap { white-space: normal; min-width: 240px; }
 
 <div class="app">
   <header class="bar">
-    <div class="brand"><span class="mark"><b>!</b>tcxp</span><span class="sub">Typed Context Protocol · v0.1 draft</span></div>
+    <div class="brand"><span class="mark"><b>!</b>tcxp</span><span class="sub">Typed Context Protocol · v0.2 draft</span></div>
     <div class="bar-actions">
       <a class="btn" href="tax-intake.html" title="A three-column demo built on tcxp.js: a manager's rule halts a tax question until the tax year is stated">Tax intake demo</a>
       <label class="switch" title="Mirror the latest pulse into the browser address bar as #!tcxp:/…">
@@ -352,6 +370,12 @@ table.grid td.wrap { white-space: normal; min-width: 240px; }
         <div class="card">
           <div class="tree-scroll" id="tree-scroll"></div>
           <div class="legend" id="legend"></div>
+          <form class="find" id="find-form" autocomplete="off" role="search">
+            <label for="find-input">Find</label>
+            <input id="find-input" list="find-hints" placeholder="gaps · variables · references:gpa · operators:eq · annotations · pointer:/where/0" spellcheck="false">
+            <datalist id="find-hints"><option value="gaps"><option value="variables"><option value="references"><option value="operators"><option value="annotations"></datalist>
+          </form>
+          <ul class="find-results" id="find-results" aria-live="polite"></ul>
         </div>
       </div>
 

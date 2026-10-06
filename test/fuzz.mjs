@@ -3,7 +3,9 @@
 import { PGlite } from '@electric-sql/pglite';
 import { createRequire } from 'module';
 const T = createRequire(import.meta.url)('../tcxp.js');
-const N = Number(process.argv[2] || 500), SEED = Number(process.argv[3] || 42);
+const ARGS = process.argv.slice(2).filter(a => !a.startsWith('--'));
+const N = Number(ARGS[0] || 500), SEED = Number(ARGS[1] || 42);
+if (process.argv.includes('--writes')) { const { fuzzWrites } = await import('./fuzz-writes.mjs'); process.exit(await fuzzWrites(T, N, SEED)); }
 const dbs = {};
 for (const [name, reg] of Object.entries(T.REGISTRIES)) if (reg.db) { dbs[name] = new PGlite(); await dbs[name].exec(T.fullDDL(name)); }
 const scratch = new PGlite();
@@ -25,7 +27,7 @@ for (let i = 0; i < N; i++) {
   tally.roundtrip++;
   if (T.serialize(T.parseURI(T.strictForm(uri))).uri === uri) tally.strict++; else { fail++; console.log('STRICT', uri); }
   const tree = f.tree; const mem = T.execute(tree);
-  if (mem.kind === 'gap') { tally.gaps++; continue; }
+  if (mem.kind === 'halt') { tally.gaps++; continue; }
   if (mem.kind === 'call') { tally.calls++; continue; }
   const g = T.toSQL(tree);
   const db = tree.parsed.mode === 'sql' ? dbs[tree.parsed.registry] : scratch;

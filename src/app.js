@@ -11,6 +11,8 @@ const state = { queryId: null, uri: '', tree: null, fit: false, addressBar: fals
 /* ---------------------------------------------------------------- explorer */
 const JOIN_TAG = {inner:'INNER', left:'LEFT', full:'FULL OUTER', right:'RIGHT', cross:'CROSS'};
 function queryTag(q) {
+  const w = q.uri.match(/\/sql\/(insert|update|delete)\?/);
+  if (w) return w[1].toUpperCase();
   if (q.uri.startsWith('@')) return '@ CALL';
   if (q.uri.includes('/math/eval')) return 'MATH';
   const m = q.uri.match(/join=(inner|left|full|right|cross)\(/);
@@ -22,7 +24,7 @@ function queryTag(q) {
 function hasGap(q) { try { return T.parseURI(q.uri).gaps.length > 0; } catch (e) { return false; } }
 function renderExplorer() {
   const regs = Object.entries(T.REGISTRIES).map(([name, r]) => {
-    const tables = r.db ? r.db.schema.tables.map(t => `<button class="ex-item" data-table="${name}|${t.name}"><span class="t"><code>${t.name}</code></span><span class="meta">${r.db.seed[t.name].length} rows</span></button>`).join('') : '';
+    const tables = r.db ? r.db.schema.tables.map(t => `<button class="ex-item" data-table="${name}|${t.name}"><span class="t"><code>${t.name}</code></span><span class="meta" data-count="${name}|${t.name}">${r.db.seed[t.name].length} rows</span></button>`).join('') : '';
     const fns = Object.keys(r.fns).map(f => `<button class="ex-item" data-uri="${esc('@!tcxp:/' + name + '/' + f)}"><span class="t"><code>${esc(f)}</code></span><span class="meta">function</span></button>`).join('');
     const notes = Object.keys(r.notes).map(n => `<button class="ex-item" data-uri="${esc('!tcxp:/' + name + '/' + n)}"><span class="t"><code>${esc(n)}</code></span><span class="meta">note</span></button>`).join('');
     const schema = r.db ? `<button class="ex-item" data-schema="${name}"><span class="t">Data dictionary and DDL</span><span class="meta">${r.db.schema.tables.length} tables</span></button>` : '';
@@ -46,6 +48,10 @@ function renderExplorer() {
     else if (b.dataset.uri) loadURI(b.dataset.uri);
   });
 }
+// Table row counts in the explorer follow this session's data, which writes change.
+function refreshCounts() {
+  document.querySelectorAll('[data-count]').forEach(el => { const [r, t] = el.dataset.count.split('|'); el.textContent = T.tableRows(r, t).length + ' rows'; });
+}
 function markCurrent() {
   document.querySelectorAll('.ex-item[data-query]').forEach(b => b.setAttribute('aria-current', String(b.dataset.query === state.queryId)));
 }
@@ -63,6 +69,8 @@ function loadURI(uri) {
   $('#uri-input').value = uri; markCurrent(); update(uri);
 }
 const metaOf = (tree, key) => { const m = tree.parsed.meta.find(x => x[0] === key); return m ? m[1] : undefined; };
+// ~intent is a string (legacy) or rows; the label is the string or the user row's text.
+const intentLabel = tree => { const v = metaOf(tree, 'intent'); if (typeof v === 'string') return v; const u = Array.isArray(v) ? v.find(r => r && r.role === 'user' && typeof r.text === 'string') : null; return u ? u.text : null; };
 
 function update(uri) {
   state.uri = uri.trim();
@@ -72,7 +80,8 @@ function update(uri) {
   try { tree = T.parseURI(state.uri); } catch (e) { err = e; }
   state.tree = tree;
   const intentMeta = tree ? metaOf(tree, 'intent') : undefined;
-  const intentText = intentMeta || (q ? q.intent : null);
+  const userRow = Array.isArray(intentMeta) ? intentMeta.find(r => r && r.role === 'user' && typeof r.text === 'string') : null;
+  const intentText = (typeof intentMeta === 'string' ? intentMeta : userRow ? userRow.text : null) || (q ? q.intent : null);
   const sub = q ? q.title + (q.uri !== state.uri ? ' · edited' : '') : (tree ? tree.parsed.registry + '/' + tree.parsed.path : 'Address');
   $('#intent').innerHTML = intentText ? `${esc(intentText)}<small>${esc(sub)}</small>` : `${esc(sub)}<small>No ~intent on this address</small>`;
   if (!tree) {
@@ -93,6 +102,7 @@ function update(uri) {
   if (ser.uri !== state.uri) diags.push({level: 'info', msg: 'Canonical form differs from what was typed (spacing, key order or encoding). The colored line is the canonical form.'});
   $('#diags').innerHTML = diags.map(d => `<li class="diag ${d.level}">${esc(d.msg)}</li>`).join('');
   renderTree(tree);
+  renderFind();
   renderResult(tree);
   renderSpikes(tree);
   renderFibers(tree);
@@ -135,7 +145,7 @@ function renderTree(tree) {
     if (!annotated.get(n).includes(sp.id)) annotated.get(n).push(sp.id);
   })));
   function prep(n) {
-    counts[nodeKind(n)]++;
+    if (!n.synthetic) counts[nodeKind(n)]++;
     if (n.kind === 'slot' && n.children[0] && bindings[n.name] && bindings[n.name].kind !== 'call' && !n.children[0]._id) n.children[0]._id = bindings[n.name]._id;
     const [a, b] = nodeText(n); n._t = [a, b];
     n._w = Math.max(44, Math.ceil(Math.max(a.length * CH, (b || '').length * CH2) + 26));
@@ -154,17 +164,20 @@ function renderTree(tree) {
     kids.forEach(k => { place(k, cx, depth + 1); cx += k._tw + GAP; });
     n._x = (kids[0]._x + kids[kids.length - 1]._x) / 2;
   }
-  prep(tree.root); place(tree.root, PAD, 0);
+  // Variables an ~intent row requires but the query never uses hang under a REQUIRES node beside the query tree.
+  const top = tree.intentSlots && tree.intentSlots.length
+    ? {kind: 'operator', op: 'intent', label: 'ADDRESS', synthetic: true, children: [tree.root, {kind: 'operator', op: 'requires', label: 'REQUIRED BY ~intent', synthetic: true, children: tree.intentSlots}]} : tree.root;
+  prep(top); place(top, PAD, 0);
   let maxY = 0; const nodes = [], edges = [];
-  (function walk(n) { nodes.push(n); maxY = Math.max(maxY, n._y + n._h); (n.children || []).forEach(k => { edges.push([n, k]); walk(k); }); })(tree.root);
-  const W = Math.ceil(tree.root._tw + PAD * 2), H = Math.ceil(maxY + PAD);
+  (function walk(n) { nodes.push(n); maxY = Math.max(maxY, n._y + n._h); (n.children || []).forEach(k => { edges.push([n, k]); walk(k); }); })(top);
+  const W = Math.ceil(top._tw + PAD * 2), H = Math.ceil(maxY + PAD);
   const e = edges.map(([p, c]) => {
     const y1 = p._y + p._h, y2 = c._y, my = (y1 + y2) / 2;
     return `<path class="edge${p.kind === 'slot' ? ' bind' : ''}" d="M${p._x} ${y1} C ${p._x} ${my}, ${c._x} ${my}, ${c._x} ${y2}"/>`;
   }).join('');
   const nd = nodes.map(n => {
     const x = n._x - n._w / 2, y = n._y, [a, b] = n._t, k = nodeKind(n);
-    const title = k === 'gap' ? 'Gap: variable with no value. Execution is blocked until it is bound.'
+    const title = k === 'gap' ? 'Gap: variable with no value. The address halts until it is bound.'
       : k === 'variable' ? 'Variable' + (n.typedBy ? ', type from ' + n.typedBy : '')
       : k === 'reference' ? 'Reference' + (n.role ? ' (' + n.role + ')' : '') : k === 'operator' ? 'Operator' : 'Value';
     const ann = annotated.get(n);
@@ -177,7 +190,7 @@ function renderTree(tree) {
   const sc = $('#tree-scroll');
   sc.innerHTML = `<svg id="tree" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Expression tree with ${nodes.length} nodes">${e}${nd}</svg>`;
   sc.classList.toggle('fit', state.fit);
-  sc.scrollLeft = Math.max(0, tree.root._x - sc.clientWidth / 2); sc.scrollTop = 0;
+  sc.scrollLeft = Math.max(0, top._x - sc.clientWidth / 2); sc.scrollTop = 0;
   $('#legend').innerHTML = `
     <span><i class="chip operator"></i>Operators <b>${counts.operator}</b></span>
     <span><i class="chip value"></i>Values <b>${counts.value}</b></span>
@@ -186,6 +199,17 @@ function renderTree(tree) {
     <span><i class="chip gap"></i>Gaps <b>${counts.gap}</b></span>
     <span><i class="chip annotation"></i>Annotations <b>${tree.spikes.length}</b></span>
     <span><i class="dash"></i>Binding</span>`;
+}
+// Find: query(uri, selector) lists pointers; hovering one highlights its node in the tree and the address.
+function renderFind() {
+  const out = $('#find-results'); const sel = $('#find-input').value.trim();
+  if (!sel || !state.tree) { out.innerHTML = ''; return; }
+  let hits;
+  try { hits = T.query(state.tree, sel); } catch (e) { out.innerHTML = `<li class="err">${esc(e.message)}</li>`; return; }
+  out.innerHTML = hits.length ? hits.map(h => {
+    const ids = T.resolvePointer(state.tree, h.pointer).map(n => n._id).filter(Boolean).join(' ');
+    return `<li data-spike-nodes="${esc(ids)}" title="${esc(h.kind)}"><b>${esc(h.label)}</b><code>${esc(h.pointer)}</code></li>`;
+  }).join('') : '<li class="none">No matches</li>';
 }
 function setHL(ids, on) { ids.forEach(id => document.querySelectorAll(`[data-node="${id}"]`).forEach(el => el.classList.toggle('hl', on))); }
 ['mouseover', 'mouseout'].forEach(type => document.addEventListener(type, e => {
@@ -203,21 +227,30 @@ const norm = v => {
   if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2} \d/.test(v)) return new Date(v.replace(' ', 'T').replace(/\+00$/, '+00:00')).toISOString();
   return v;
 };
+const unordered = rs => JSON.stringify(rs.map(r => JSON.stringify(r)).sort());
 function snapshotCheck(tree, res) {
-  const s = SNAP.results[T.identity(tree)];
+  const s = SNAP.results[T.resultKey(tree)];
   if (!s) return null;
+  if (res.kind === 'preview' || res.kind === 'write') {
+    if (s.kind !== 'write') return false;
+    return res.count === s.count && JSON.stringify(res.returning.columns) === JSON.stringify(s.columns) && unordered(res.returning.rows.map(r => r.map(norm))) === unordered(s.rows);
+  }
+  if (res.kind === 'error') return s.kind === 'error' && s.code === res.code;
   if (s.kind !== res.kind) return false;
-  if (s.kind === 'gap') return JSON.stringify(s.gaps) === JSON.stringify(res.gaps);
+  if (s.kind === 'halt') return JSON.stringify(s.gaps) === JSON.stringify(res.gaps);
   if (s.kind === 'value') return norm(res.value) === s.value;
   if (s.kind === 'call') return res.value === s.value;
   const a = res.rows.map(r => r.map(norm));
   const key = rs => s.ordered ? JSON.stringify(rs) : JSON.stringify(rs.map(r => JSON.stringify(r)).sort());
   return key(a) === key(s.rows) && JSON.stringify(res.columns) === JSON.stringify(s.columns);
 }
-function badge(tree, res) {
+function badge(tree, res, dataWasClean) {
+  if ((res.kind === 'rows' || res.kind === 'preview') && T.dataChanged()) return `<span class="pill warn">Session data changed by a write; the ${esc(ENGINE)} reference is for the shipped data</span>`;
+  if (dataWasClean === false) return `<span class="pill warn">Ran on changed session data; the ${esc(ENGINE)} reference is for the shipped data</span>`;
   const ok = snapshotCheck(tree, res);
   if (ok === null) return `<span class="pill mute">No ${esc(ENGINE)} reference for this address</span>`;
   if (res.kind === 'call') return ok ? `<span class="pill ok">✓ Matches verified result</span>` : `<span class="pill bad">✗ Differs from verified result</span>`;
+  if (res.kind === 'error') return ok ? `<span class="pill ok">✓ ${esc(ENGINE)} fails the same way (${esc(res.code)})</span>` : `<span class="pill bad">✗ ${esc(ENGINE)} does not fail this way</span>`;
   return ok ? `<span class="pill ok">✓ Matches ${esc(ENGINE)}</span>` : `<span class="pill bad">✗ Differs from ${esc(ENGINE)}</span>`;
 }
 function cell(v) {
@@ -236,28 +269,34 @@ function literalFor(raw, type) {
   if (v.startsWith('@!tcxp:/')) return v.replace(/%/g, '%25').replace(/&/g, '%26');
   return "'" + v.replace(/'/g, "''") + "'";
 }
-function gapPanel(tree) {
+// A halt: every missing variable, and for each one the intent rows that require it.
+function gapPanel(tree, res) {
+  const by = (res && res.requiredBy) || [];
   const rows = tree.gaps.map(name => {
     const slot = T.findSlot(tree.root, name) || (tree.parsed.items[name] && tree.parsed.items[name][0]);
     const type = slot && slot.type ? T.baseType(slot.type) : null;
     const notes = tree.spikes.filter(sp => sp.targets.some(t => t.nodes.includes(slot)))
       .flatMap(sp => ['environment', 'structure'].filter(f => sp.facets[f].lit).map(f => `<div class="env"><b>${esc(sp.id)} · ${f}:</b> ${esc(sp.facets[f].text)}</div>`)).join('');
     const isParam = slot && slot.param;
-    return `<div class="gaprow"><div><b><code>${isParam ? '' : '$'}${esc(name)}</code></b>${type ? ` expects <code>${esc(type)}</code>` : ''}. Nothing runs until it has a value.</div>${notes}
+    const reqs = by.filter(x => x.var === name).map(x => `<div class="env"><b>Required by intent row ${x.row + 1}${x.role ? ' (' + esc(x.role) + ')' : ''}:</b> ${esc(x.text)}</div>`).join('');
+    return `<div class="gaprow"><div><b><code>${isParam ? '' : '$'}${esc(name)}</code></b>${type ? ` expects <code>${esc(type)}</code>` : ''}. Nothing runs until it has a value.</div>${reqs}${notes}
       <form data-gap="${esc(name)}" data-type="${esc(type || '')}" data-param="${isParam ? 1 : 0}"><input id="gap-${esc(name)}" placeholder="Value for ${isParam ? '' : '$'}${esc(name)}" aria-label="Value for ${esc(name)}"><button class="btn small" type="submit">Bind</button></form></div>`;
   }).join('');
-  return `<div class="gapbox"><h3>Blocked by ${tree.gaps.length} gap${tree.gaps.length === 1 ? '' : 's'}</h3>${rows}</div>`;
+  return `<div class="gapbox"><h3>HALT · ${tree.gaps.length} gap${tree.gaps.length === 1 ? '' : 's'}</h3>${rows}</div>`;
 }
 function renderResult(tree) {
   const card = $('#result-card'); const title = $('#result-title');
-  if (tree.diagnostics.some(d => d.level === 'error')) { title.textContent = 'Result'; card.innerHTML = `<div class="err-box">Resolve the errors above to run this address.</div>`; return; }
+  const errDiag = tree.diagnostics.find(d => d.level === 'error' || d.level === 'refused');
+  if (errDiag && errDiag.level === 'refused') { title.textContent = 'Write refused'; card.innerHTML = `<div class="err-box">${esc(errDiag.msg)}</div><div class="status-line"><span>Nothing ran. The engine refuses this before any data is touched.</span></div>`; return; }
+  if (errDiag) { title.textContent = 'Result'; card.innerHTML = `<div class="err-box">Resolve the errors above to run this address.</div>`; return; }
+  if (tree.parsed.mode === 'write') { renderWrite(tree, card, title); return; }
   let res;
   try { res = T.execute(tree); } catch (e) { title.textContent = 'Result'; card.innerHTML = `<div class="err-box">${esc(e.message)}</div>`; return; }
   state.result = res;
   const mode = tree.parsed.mode;
-  if (res.kind === 'gap') {
-    title.textContent = mode === 'math' ? 'Decide (if)' : 'Result';
-    card.innerHTML = (mode === 'math' ? decidePanel(tree, null) : '') + gapPanel(tree) + `<div class="status-line">${badge(tree, res)}</div>`;
+  if (res.kind === 'halt') {
+    title.textContent = mode === 'math' ? 'Decide (if)' : 'Halted';
+    card.innerHTML = (mode === 'math' ? decidePanel(tree, null) : '') + gapPanel(tree, res) + `<div class="status-line"><span>A gap always halts. Nothing runs or writes until every required variable is bound.</span>${badge(tree, res)}</div>`;
   } else if (res.kind === 'value') {
     title.textContent = res.decision === null ? 'Value' : 'Decide (if)';
     card.innerHTML = (res.decision === null ? `<div class="returned"><span class="big">${esc(res.value)}</span></div>` : decidePanel(tree, res.decision)) + `<div class="status-line"><span>Computed in this page by evaluating the tree</span>${badge(tree, res)}</div>`;
@@ -278,12 +317,70 @@ function renderResult(tree) {
   card.querySelectorAll('form[data-gap]').forEach(f => f.addEventListener('submit', ev => {
     ev.preventDefault();
     const input = f.querySelector('input'); if (!input.value.trim()) { input.focus(); return; }
-    const key = (f.dataset.param === '1' ? '' : '$') + f.dataset.gap;
-    const val = f.dataset.param === '1' ? input.value.trim().replace(/%/g, '%25').replace(/&/g, '%26') : literalFor(input.value, f.dataset.type);
-    const base = state.uri.includes('?') ? state.uri + '&' : state.uri + '?';
-    let next = base + key + '=' + val;
-    try { next = T.serialize(T.parseURI(next)).uri; } catch (e) {}
+    let next;
+    if (f.dataset.param === '1') {
+      const base = state.uri.includes('?') ? state.uri + '&' : state.uri + '?';
+      next = base + f.dataset.gap + '=' + input.value.trim().replace(/%/g, '%25').replace(/&/g, '%26');
+      try { next = T.serialize(T.parseURI(next)).uri; } catch (e) {}
+    } else {
+      // The same edit API the engine exposes; the workbench stamps its own pulse when the state commits.
+      const raw = input.value.trim();
+      const value = raw.startsWith('@!tcxp:/') ? raw : literalFor(raw, f.dataset.type);
+      try { next = T.edit(state.uri, [{op: 'bind', var: f.dataset.gap, value}], {pulse: false}).uri; }
+      catch (e) { input.setCustomValidity(e.message); input.reportValidity(); input.addEventListener('input', () => input.setCustomValidity(''), {once: true}); return; }
+    }
     $('#uri-input').value = next; update(next);
+  }));
+}
+/* ------------------------------------------------------------------ writes */
+// A write address shows a preview. It runs only when "Run this write" arms it, exactly once; opening or
+// re-rendering an @ address never applies it by itself.
+const OPWORD = {insert: ['inserted', 'insert'], update: ['changed', 'change'], delete: ['removed', 'remove']};
+function changesTable(res) {
+  const cols = res.columns;
+  const body = res.changes.map(ch => {
+    if (res.op === 'insert') return `<tr class="ins">${ch.after.map(cell).join('')}</tr>`;
+    if (res.op === 'delete') return `<tr class="del">${ch.before.map(cell).join('')}</tr>`;
+    return `<tr>${ch.after.map((v, i) => ch.before[i] === v ? cell(v) : `<td class="chg"><s>${esc(fmtVal(ch.before[i]))}</s> → <b>${esc(fmtVal(v))}</b></td>`).join('')}</tr>`;
+  }).join('') || `<tr><td colspan="${cols.length}" class="null">No rows match</td></tr>`;
+  return `<div class="tbl-wrap" style="max-height:420px;overflow:auto"><table class="grid changes"><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+function plainOf(tree) { const u = T.serialize(tree).uri; return u.startsWith('@') ? u.slice(1) : u; }
+function renderWrite(tree, card, title) {
+  const id = T.identity(tree);
+  const done = state.lastWrite && state.lastWrite.identity === id ? state.lastWrite : null;
+  let res = null, err = null, clean = !T.dataChanged();
+  if (tree.parsed.call && state.armed === id && !done) {
+    state.armed = null;
+    try { res = T.execute(tree); state.lastWrite = {identity: id, res, clean}; refreshCounts(); } catch (e) { err = e; }
+  } else if (done) { res = done.res; clean = done.clean; }
+  else { try { res = T.execute(tree, {preview: true}); } catch (e) { err = e; } }
+  const resetBtn = T.dataChanged() ? `<button class="btn small" type="button" data-act="reset">Reset data</button>` : '';
+  if (err) {
+    title.textContent = 'Write would fail';
+    card.innerHTML = `<div class="err-box">${esc(err.message)}${err.code ? ` <code>${esc(err.code)}</code>` : ''}</div><div class="status-line"><span>Nothing was changed.</span>${badge(tree, {kind: 'error', code: err.code}, clean ? undefined : false)}${resetBtn}</div>`;
+  } else if (res.kind === 'halt') {
+    title.textContent = 'Write halted';
+    card.innerHTML = gapPanel(tree, res) + `<div class="status-line"><span>A gap always halts: no preview, and nothing is written, until every required variable is bound.</span>${badge(tree, res)}</div>`;
+  } else {
+    const [done1, verb] = OPWORD[res.op];
+    const ret = res.returning.columns.length ? `<div class="sub-h">RETURNING</div>` + resultTable(res.returning.columns, res.returning.rows) : '';
+    if (res.kind === 'preview') {
+      title.textContent = 'Preview: nothing has changed yet';
+      card.innerHTML = `<div class="write-note">This write would ${verb} <b>${res.count}</b> row${res.count === 1 ? '' : 's'} in <code>${esc(res.table)}</code>.</div>` + changesTable(res) + ret +
+        `<div class="status-line"><button class="btn small primary" type="button" data-act="run">Run this write</button><span>Runs once, as <code>@</code>${esc(plainOf(tree).slice(0, 32))}…, on this session's copy of the data.</span>${badge(tree, res)}${resetBtn}</div>`;
+    } else {
+      title.textContent = 'Write applied';
+      card.innerHTML = `<div class="write-note ok">${res.count} row${res.count === 1 ? '' : 's'} ${done1} in <code>${esc(res.table)}</code> (this session's copy; the shipped data is untouched).</div>` + changesTable(res) + ret +
+        `<div class="sub-h">Inverse: ${res.inverse.length} address${res.inverse.length === 1 ? '' : 'es'} that undo this write exactly</div><ul class="inverse">${res.inverse.map(u => `<li><code>${esc(u)}</code></li>`).join('') || '<li class="null">Nothing to undo</li>'}</ul>` +
+        `<div class="status-line">${res.inverse.length ? '<button class="btn small" type="button" data-act="undo">Undo</button>' : ''}${resetBtn}${badge(tree, res, clean)}</div>`;
+    }
+  }
+  card.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
+    const act = b.dataset.act;
+    if (act === 'run') { const at = '@' + plainOf(tree); state.armed = T.identity(T.parseURI(at)); state.lastWrite = null; loadURI(at); }
+    else if (act === 'undo') { res.inverse.forEach(u => T.execute(T.parseURI(u))); state.lastWrite = null; refreshCounts(); loadURI(plainOf(tree)); }
+    else if (act === 'reset') { T.resetData(); state.lastWrite = null; refreshCounts(); update(state.uri); }
   }));
 }
 function decidePanel(tree, decision) {
@@ -316,7 +413,7 @@ function renderSpikes(tree) {
 }
 
 /* ------------------------------------------------------------------ fibers */
-const KW = /\b(SELECT|FROM|WHERE|GROUP BY|HAVING|ORDER BY|LIMIT|OFFSET|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL OUTER JOIN|CROSS JOIN|ON|AND|OR|NOT|IN|BETWEEN|IS NOT NULL|IS NULL|LIKE|ILIKE|AS|ASC|DESC|DATE|extract|year from)\b/g;
+const KW = /\b(INSERT INTO|VALUES|RETURNING|UPDATE|SET|DELETE FROM|SELECT|FROM|WHERE|GROUP BY|HAVING|ORDER BY|LIMIT|OFFSET|INNER JOIN|LEFT JOIN|RIGHT JOIN|FULL OUTER JOIN|CROSS JOIN|ON|AND|OR|NOT|IN|BETWEEN|IS NOT NULL|IS NULL|LIKE|ILIKE|AS|ASC|DESC|DATE|extract|year from)\b/g;
 function hiSQL(sql) {
   return sql.split(/('(?:[^']|'')*')/).map((part, i) => i % 2 ? `<span class="lit">${esc(part)}</span>`
     : esc(part).replace(KW, '<span class="kw">$1</span>').replace(/\$(\d+)/g, '<span class="pm">$$$1</span>')).join('');
@@ -324,7 +421,7 @@ function hiSQL(sql) {
 function fmtVal(v) { return v === null || v === undefined ? 'null' : typeof v === 'string' ? `'${v}'` : String(v); }
 function renderFibers(tree) {
   const mode = tree.parsed.mode; const fib = {};
-  if (mode === 'sql' || mode === 'math') {
+  if (mode === 'sql' || mode === 'math' || mode === 'write') {
     const g = T.toSQL(tree);
     const rows = g.paramNames.map((name, i) => {
       const slot = T.findSlot(tree.root, name);
@@ -367,9 +464,11 @@ function commitPulse(tree) {
   state.step += 1;
   const at = new Date().toISOString();
   const parent = last ? last.identity : null;
-  const uri = T.withPulse(tree, state.step, at, T.DEBOUNCE_MS, parent);
   const id = T.identity(tree);
-  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: (metaOf(tree, 'intent') || tree.parsed.registry + '/' + tree.parsed.path)});
+  const wrote = state.lastWrite && state.lastWrite.identity === id ? {undo: state.lastWrite.res.inverse} : {};
+  const extra = Object.keys(wrote).length ? wrote : null;
+  const uri = T.withPulse(tree, state.step, at, T.DEBOUNCE_MS, parent, extra);
+  state.pulses.push({step: state.step, at, uri, base: withoutPulse, identity: id, parent, undo: wrote.undo || null, parentStep: last ? last.step : null, changed: !last || last.identity !== id, label: intentLabel(tree) || tree.parsed.registry + '/' + tree.parsed.path});
   renderPulses(); syncAddressBar();
 }
 function renderPulses() {
@@ -399,7 +498,7 @@ function columnsTable(t) {
 function openTable(reg, name, opener) {
   const db = T.REGISTRIES[reg].db; const t = db.schema.tables.find(x => x.name === name);
   openSheet(reg + ' · ' + name, t.description, [
-    ['Rows (' + db.seed[name].length + ')', () => `<div class="card">${resultTable(t.columns.map(c => c[0]), db.seed[name])}</div>`],
+    ['Rows (' + T.tableRows(reg, name).length + ')', () => `<div class="card">${resultTable(t.columns.map(c => c[0]), T.tableRows(reg, name))}</div>${T.dataChanged() ? '<div class="status-line">This session\'s data, after the writes run here. Reset data restores the shipped rows.</div>' : ''}`],
     ['Columns', () => columnsTable(t)],
     ['DDL', () => `<div class="card"><pre class="code">${hiSQL(T.tableDDL(t) + '\n' + T.tableInserts(t, db.seed))}</pre></div>`]
   ], opener);
@@ -425,13 +524,16 @@ function runTests() {
       rt = T.serialize(tree).uri === q.uri;
       strict = T.serialize(T.parseURI(T.strictForm(q.uri))).uri === q.uri;
       if (q.ref) ref = T.toSQL(tree, {inline: true}).sql.replace(/\s+/g, ' ') === q.ref;
-      const r = T.execute(tree); kind = r.kind;
+      let r;
+      try { r = T.execute(tree, {store: T.newStore()}); }
+      catch (e) { if (!e.code) throw e; r = {kind: 'error', code: e.code}; }
+      kind = r.kind === 'error' ? 'error ' + r.code : r.kind;
       res = snapshotCheck(tree, r) === true;
     } catch (e) { note = e.message; }
     const all = parse && rt && strict && ref !== false && res; if (all) qPass++;
     return `<tr><td class="wrap"><button class="probe title" data-uri="${esc(q.uri)}">${esc(q.title)}</button>${note ? `<div class="diag error">${esc(note)}</div>` : ''}</td>
       <td>${parse ? Y : N}</td><td>${rt ? Y : N}</td><td>${strict ? Y : N}</td><td>${ref === null ? NA : ref ? Y : N}</td>
-      <td>${res ? Y : N} <span style="color:var(--ink-3);font-size:12px">${esc(kind === 'gap' ? 'gap blocks run' : kind)}</span></td></tr>`;
+      <td>${res ? Y : N} <span style="color:var(--ink-3);font-size:12px">${esc(kind === 'halt' ? 'halts: nothing runs' : kind)}</span></td></tr>`;
   }).join('');
   $('#test-queries').innerHTML = `<table class="grid"><thead><tr><th>Address</th><th>Parses</th><th>Round-trip</th><th>Strict form</th><th>SQL = reference</th><th>Result = verified</th></tr></thead><tbody>${qRows}</tbody></table>`;
 
@@ -440,7 +542,10 @@ function runTests() {
   const check = (name, why, fn) => { let pass = 0, total = 0; trees.forEach(t => { const r = fn(t); if (r === null) return; total++; if (r) pass++; }); inv.push([name, why, pass, total]); };
   check('Identity ignores meta', 'Removing every ~key leaves the identity unchanged', t => {
     if (!t.parsed.meta.length) return null;
-    const stripped = T.serialize(t).uri.split(/[?&]/).filter((p, i) => i === 0 || !p.startsWith('~')).reduce((a, p, i) => i === 0 ? p : a + (a.includes('?') ? '&' : '?') + p, '');
+    // Split only the query part, and only on "&": a meta value may contain "?" (canonical form escapes only % & #).
+    const u = T.serialize(t).uri, qi = u.indexOf('?');
+    const kept = u.slice(qi + 1).split('&').filter(p => !p.startsWith('~'));
+    const stripped = u.slice(0, qi) + (kept.length ? '?' + kept.join('&') : '');
     return T.identity(T.parseURI(stripped)) === T.identity(t);
   });
   const PARENT = T.identity(trees[0]);
@@ -452,8 +557,17 @@ function runTests() {
     inv.push(['Every parent is an earlier pulse', 'In a pulse chain, each parent equals the identity of an earlier pulse (the first has parent null)', pass, chain.length]); }
   check('Every pointer resolves', 'Each annotation pointer lands on at least one node', t => t.spikes.length ? t.spikes.every(sp => sp.data) : null);
   check('Every lit facet resolves', 'Facet addresses resolve to notes in a registry', t => t.spikes.length ? t.spikes.every(sp => !sp.problems.length) : null);
-  check('Gaps block execution', 'Any unbound variable makes execute() return a gap and run nothing', t => t.gaps.length ? T.execute(t).kind === 'gap' : null);
-  check('Bound trees have no gaps', 'With every variable bound, execution produces a result', t => t.gaps.length ? null : T.execute(t).kind !== 'gap');
+  check('A gap always halts', 'A gap always halts. Nothing runs or writes until every required variable is bound.', t => { if (!t.gaps.length) return null; const st = T.newStore(); return T.execute(t, {store: st}).kind === 'halt' && !T.dataChanged(st); });
+  check('Intent rows never change identity', 'Removing ~intent (string or rows) leaves the identity unchanged', t => { const m = t.parsed.meta.find(x => x[0] === 'intent'); if (!m) return null; return T.identity(T.edit(T.serialize(t).uri, [{op: 'meta', key: 'intent', value: null}], {pulse: false}).tree) === T.identity(t); });
+  check('Bound trees have no gaps', 'With every variable bound, execution produces a result or a plain-language refusal, never a halt', t => { if (t.gaps.length) return null; try { return T.execute(t, {store: T.newStore()}).kind !== 'halt'; } catch (e) { return !!e.code; } });
+  check('A preview never writes', 'Running a write address without @ changes no data', t => { if (t.parsed.mode !== 'write' || t.gaps.length) return null; const st = T.newStore(); try { T.execute(t, {store: st, preview: true}); } catch (e) { if (!e.code) return false; } return !T.dataChanged(st); });
+  check('Inverse restores the data', 'Applying a write and then its inverse addresses leaves every table as it was', t => {
+    if (t.parsed.mode !== 'write' || t.gaps.length || t.diagnostics.some(d => d.level === 'error' || d.level === 'refused')) return null;
+    const st = T.newStore(); let w;
+    try { w = T.execute(T.parseURI('@' + T.serialize(t).uri.replace(/^@/, '')), {store: st}); } catch (e) { return e.code ? null : false; }
+    w.inverse.forEach(u => T.execute(T.parseURI(u), {store: st}));
+    return !T.dataChanged(st);
+  });
   $('#test-invariants').innerHTML = `<table class="grid"><thead><tr><th>Invariant</th><th>What it means</th><th>Result</th></tr></thead><tbody>${inv.map(([n, w, p, tot]) =>
     `<tr><td>${esc(n)}</td><td class="wrap">${esc(w)}</td><td>${p === tot ? `<span class="pill ok">✓ ${p} / ${tot}</span>` : `<span class="pill bad">✗ ${p} / ${tot}</span>`}</td></tr>`).join('')}</tbody></table>`;
 
@@ -462,7 +576,7 @@ function runTests() {
     let status;
     if (st === 'yes') {
       cYes++; let ok = false;
-      try { const t = T.parseURI(uri); ok = T.serialize(t).uri === uri && snapshotCheck(t, T.execute(t)) === true; } catch (e) {}
+      try { const t = T.parseURI(uri); ok = T.serialize(t).uri === uri && snapshotCheck(t, T.execute(t, {store: T.newStore()})) === true; } catch (e) {}
       if (ok) cVer++;
       status = ok ? '<span class="pill ok">✓ Represented, verified</span>' : '<span class="pill bad">✗ Represented, check failed</span>';
     } else { cNo++; status = '<span class="pill warn">Not representable yet</span>'; }
@@ -489,13 +603,13 @@ function runGenerator() {
     if (!f.tree) return;
     try { if (T.serialize(T.parseURI(T.strictForm(u))).uri === u) strict++; } catch (e) {}
     if (f.tree.parsed.meta.length) { idMetaTotal++; try { if (T.identity(T.parseURI(T.withPulse(f.tree, 1, '2026-01-01T00:00:00.000Z', 300))) === T.identity(f.tree)) idMeta++; } catch (e) {} }
-    try { const r = T.execute(f.tree); kinds[r.kind] = (kinds[r.kind] || 0) + 1; if (f.tree.gaps.length) { gapsTotal++; if (r.kind === 'gap') gapsBlocked++; } } catch (e) { kinds.error = (kinds.error || 0) + 1; }
+    try { const r = T.execute(f.tree); kinds[r.kind] = (kinds[r.kind] || 0) + 1; if (f.tree.gaps.length) { gapsTotal++; if (r.kind === 'halt') gapsBlocked++; } } catch (e) { kinds.error = (kinds.error || 0) + 1; }
   });
   const pill = (a, b) => a === b ? `<span class="pill ok">✓ ${a} / ${b}</span>` : `<span class="pill bad">✗ ${a} / ${b}</span>`;
   const rows = T.RULES.map(([id, name]) => `<tr><td>Rule: ${esc(name)}</td><td>${pill(tally[id], n)}</td></tr>`).join('') +
     `<tr><td>Strict percent-encoded form parses back to the same address</td><td>${pill(strict, n)}</td></tr>
      <tr><td>Identity ignores ~meta (addresses that carry meta)</td><td>${pill(idMeta, idMetaTotal)}</td></tr>
-     <tr><td>Gaps block execution</td><td>${pill(gapsBlocked, gapsTotal)}</td></tr>
+     <tr><td>A gap always halts</td><td>${pill(gapsBlocked, gapsTotal)}</td></tr>
      <tr><td>Outcomes</td><td>${Object.entries(kinds).map(([k, v]) => `<span class="pill mute">${esc(k)} ${v}</span>`).join(' ')}</td></tr>`;
   const samples = uris.slice(0, 8).map(u => `<li style="margin:4px 0"><button class="probe" data-uri="${esc(u)}">${esc(u)}</button></li>`).join('');
   $('#test-generator').innerHTML = `<table class="grid"><thead><tr><th>Check over ${n} generated addresses (seed ${seed})</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table>
@@ -549,9 +663,11 @@ function init() {
   $('#reset-uri').addEventListener('click', () => selectQuery(state.queryId, {noScroll: true}));
   $('#copy-uri').addEventListener('click', e => copy(state.uri, e.currentTarget));
   $('#copy-fiber').addEventListener('click', e => { const f = state.fibers[state.fiber]; if (f) copy(f.text, e.currentTarget); });
-  $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent, identity: p.identity, uri: p.uri})).join('\n'), e.currentTarget));
+  $('#copy-jsonl').addEventListener('click', e => copy(state.pulses.map(p => JSON.stringify(Object.assign({step: p.step, at: p.at, debounce_ms: T.DEBOUNCE_MS, parent: p.parent}, p.undo ? {undo: p.undo} : {}, {identity: p.identity, uri: p.uri}))).join('\n'), e.currentTarget));
   $('#fiber-tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (!b) return; state.fiber = b.dataset.f; $('#fiber-tabs').querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === b))); $('#fiber-body').innerHTML = state.fibers[state.fiber].html; });
   $('#pulses').addEventListener('click', e => { const li = e.target.closest('.pulse'); if (!li) return; const p = state.pulses.find(x => x.step === +li.dataset.step); if (p) loadURI(p.uri); });
+  $('#find-form').addEventListener('submit', e => e.preventDefault());
+  $('#find-input').addEventListener('input', renderFind);
   $('#fit-tree').addEventListener('click', e => { state.fit = !state.fit; e.currentTarget.setAttribute('aria-pressed', String(state.fit)); e.currentTarget.textContent = state.fit ? 'Actual size' : 'Fit to width'; $('#tree-scroll').classList.toggle('fit', state.fit); });
   $('#addr-toggle').addEventListener('change', e => {
     state.addressBar = e.target.checked;

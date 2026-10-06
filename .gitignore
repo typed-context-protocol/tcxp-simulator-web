@@ -2,3 +2,6 @@ node_modules/
 .DS_Store
 .lake/
 *.olean
+demo/tax-intake.html
+demo/tax-intake.repo.html
+demo/tax-intake.artifact.html

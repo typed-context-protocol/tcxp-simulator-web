@@ -86,6 +86,14 @@ const REGISTRIES = {
 const Q = (id, group, title, intent, uri, ref) => ({id, group, title, intent, uri, ref: ref || null});
 const S = '!tcxp:/school.demo/sql/select?';
 const F = '!tcxp:/firm.demo/sql/select?';
+const W = '!tcxp:/school.demo/sql/';
+const WF = '!tcxp:/firm.demo/sql/';
+const C = '!tcxp:/client.demo/sql/select?';
+const CSV_TAX = "cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))";
+const CSV_ALL = "cols=as(sum(hours),us_hours)&from=client_hours&where=eq(work_country,'US')";
+const USER_ROW = {role: 'user', text: 'What are the US hours worked in my client CSV?'};
+const MANAGER_ROW = {role: 'manager', text: 'Before submitting, the user must state the tax year they are referencing.', require: '$tax_year', if_empty: 'HALT'};
+const intentRows = rows => '~intent=' + enc(JSON.stringify(rows));
 const enc = s => s.replace(/%/g, '%25').replace(/&/g, '%26').replace(/#/g, '%23');
 const spikes = rows => '~spikes=' + enc(JSON.stringify(rows));
 const intent = t => '~intent=' + enc(t);
@@ -153,9 +161,61 @@ const QUERIES = [
     "SELECT sum(work_logs.hours) AS us_hours FROM work_logs WHERE work_logs.work_country = 'US' AND extract(year from work_logs.worked_on) = 2024"),
   Q('us-hours-fy-vs-tax','tax','US hours: calendar year vs fiscal year','How do US hours split between calendar years and project fiscal years?',
     F + "cols=as(year(work_logs.worked_on),calendar_year),projects.fiscal_year,as(sum(work_logs.hours),us_hours)&from=work_logs&join=inner(projects,eq(projects.project_id,work_logs.project_id))&where=eq(work_logs.work_country,$country)&group=year(work_logs.worked_on),projects.fiscal_year&order=asc(calendar_year),asc(projects.fiscal_year)&$country='US'",
-    "SELECT extract(year from work_logs.worked_on) AS calendar_year, projects.fiscal_year, sum(work_logs.hours) AS us_hours FROM work_logs INNER JOIN projects ON projects.project_id = work_logs.project_id WHERE work_logs.work_country = 'US' GROUP BY extract(year from work_logs.worked_on), projects.fiscal_year ORDER BY calendar_year ASC, projects.fiscal_year ASC")
+    "SELECT extract(year from work_logs.worked_on) AS calendar_year, projects.fiscal_year, sum(work_logs.hours) AS us_hours FROM work_logs INNER JOIN projects ON projects.project_id = work_logs.project_id WHERE work_logs.work_country = 'US' GROUP BY extract(year from work_logs.worked_on), projects.fiscal_year ORDER BY calendar_year ASC, projects.fiscal_year ASC"),
+  // v0.2 writes. Without @ each address is a proposed write (preview); with @ it runs.
+  Q('write-insert-one','writes','Add a course (insert one row)','Add the new Data Visualization course, DS310, worth 3 credits.',
+    W + "insert?into=courses&cols=course_id,code,title,department,credits&values=row(6,'DS310','Data Visualization','DS',$credits)&returning=*&$credits=3",
+    "INSERT INTO courses (course_id, code, title, department, credits) VALUES (6, 'DS310', 'Data Visualization', 'DS', 3) RETURNING *"),
+  Q('write-insert-many','writes','Enroll a student in two courses (insert several rows)','Enroll Hannah Weiss in CS101 and DS210 today.',
+    W + "insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,$student,1,$today,'active'),row(22,$student,3,$today,'active')&returning=enrollment_id,course_id&$student=5&$today=date'2026-10-04'",
+    "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 5, 1, DATE '2026-10-04', 'active'), (22, 5, 3, DATE '2026-10-04', 'active') RETURNING enrollment_id, course_id"),
+  Q('write-update-bound','writes','Record a new GPA (update with bound variables)',"Record Noah Kim's new GPA of 3.15.",
+    W + 'update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,$id)&returning=student_id,first_name,gpa&$gpa=3.15&$id=8',
+    'UPDATE students SET gpa = 3.15 WHERE student_id = 8 RETURNING student_id, first_name, gpa'),
+  Q('write-update-call','writes','Move a student to the open cohort (update bound by a call)','Move Priya Nair into the cohort that is open for enrollment now.',
+    W + 'update?table=students&set=assign(cohort,$cohort)&where=eq(student_id,3)&returning=student_id,cohort&$cohort=@!tcxp:/school.demo/fn/current_cohort',
+    "UPDATE students SET cohort = '2026-fall' WHERE student_id = 3 RETURNING student_id, cohort"),
+  Q('write-delete-where','writes','Delete low late submissions (delete with where)','Delete the late submissions that scored under 60.',
+    W + "delete?from=submissions&where=and(eq(status,'late'),lt(score,$below))&returning=submission_id,score&$below=60",
+    "DELETE FROM submissions WHERE status = 'late' AND score < 60 RETURNING submission_id, score"),
+  Q('write-update-expr','writes','Add half an hour to a work log (update with an expression)',"Add half an hour to Ana Ruiz's work log for May 20, 2024.",
+    WF + 'update?table=work_logs&set=assign(hours,add(hours,$extra))&where=eq(log_id,2)&returning=log_id,hours&$extra=0.5',
+    'UPDATE work_logs SET hours = hours + 0.5 WHERE log_id = 2 RETURNING log_id, hours'),
+  Q('write-delete-all','writes','Clear every submission on purpose (where=true)','Clear every submission. Yes, all of them.',
+    W + 'delete?from=submissions&where=true&returning=submission_id',
+    'DELETE FROM submissions WHERE true RETURNING submission_id'),
+  Q('write-update-gap','writes','Set a GPA, value missing (gap blocks the write)',"Set Maya Chen's GPA.",
+    W + 'update?table=students&set=assign(gpa,$gpa)&where=eq(student_id,1)'),
+  Q('write-delete-no-where','writes','Delete with no where (refused)','Delete every submission.',
+    W + 'delete?from=submissions'),
+  Q('write-fk-violation','writes','Enroll a student who does not exist (foreign key error)','Enroll student 99 in CS101.',
+    W + "insert?into=enrollments&cols=enrollment_id,student_id,course_id,enrolled_at,status&values=row(21,99,1,date'2026-10-04','active')",
+    "INSERT INTO enrollments (enrollment_id, student_id, course_id, enrolled_at, status) VALUES (21, 99, 1, DATE '2026-10-04', 'active')"),
+  // v0.2 CSV data source: client.demo/client_hours is loaded from a CSV with registerCSV (see data_csv.js).
+  Q('csv-us-hours-2024','csv','US hours in the client CSV, tax year 2024','What are the US hours worked in my client CSV in 2024?',
+    C + "cols=as(sum(hours),us_hours)&from=client_hours&where=and(eq(work_country,'US'),eq(year(date),$tax_year))&$tax_year=2024",
+    "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024"),
+  Q('csv-hours-by-employee','csv','Hours per person in the client CSV','How many hours did each person log, and where?',
+    C + 'cols=employee,work_country,as(sum(hours),total_hours),as(count(*),days)&from=client_hours&group=employee,work_country&order=asc(employee),asc(work_country)',
+    'SELECT employee, work_country, sum(hours) AS total_hours, count(*) AS days FROM client_hours GROUP BY employee, work_country ORDER BY employee ASC, work_country ASC'),
+  Q('csv-insert-row','csv','Add a day to the client CSV (write)','Add a 6-hour US day for Ana Ruiz on 2025-10-01.',
+    '!tcxp:/client.demo/sql/insert?into=client_hours&cols=row_id,employee,date,hours,work_country&values=row(23,$who,$day,6,\'US\')&returning=*&$who=\'Ana Ruiz\'&$day=date\'2025-10-01\'',
+    "INSERT INTO client_hours (row_id, employee, date, hours, work_country) VALUES (23, 'Ana Ruiz', DATE '2025-10-01', 6, 'US') RETURNING *"),
+  // v0.2 intent rows: ~intent as an array. The manager's row requires $tax_year; until it is bound the address halts.
+  Q('intent-halt','intent','US hours: halts until the tax year is stated','What are the US hours worked in my client CSV?',
+    C + CSV_TAX + '&' + intentRows([USER_ROW, MANAGER_ROW])),
+  Q('intent-answered','intent','US hours: tax year given, it runs','What are the US hours worked in my client CSV? (2024)',
+    C + CSV_TAX + '&$tax_year=2024&' + intentRows([USER_ROW, MANAGER_ROW]),
+    "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US' AND extract(year from date) = 2024"),
+  Q('intent-require-only','intent','Required even though the query never uses it','What are the US hours worked in my client CSV, all years?',
+    C + CSV_ALL + '&' + intentRows([USER_ROW, MANAGER_ROW])),
+  Q('intent-require-only-bound','intent','Required, bound, and the query runs unchanged','What are the US hours worked in my client CSV, all years? (tax year 2024 stated)',
+    C + CSV_ALL + '&$tax_year=2024&' + intentRows([USER_ROW, MANAGER_ROW]),
+    "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US'"),
+  Q('intent-halt-implied','intent','if_empty omitted: HALT is the default','What are the US hours worked in my client CSV?',
+    C + CSV_ALL + '&' + intentRows([USER_ROW, {role: 'manager', text: MANAGER_ROW.text, require: '$tax_year'}]))
 ];
 const GROUPS = [
   ['students','School · students table'],['submissions','School · submissions table'],['joins','School · joins'],
-  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours']
+  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes'],['csv','Client CSV'],['intent','Intent rows']
 ];

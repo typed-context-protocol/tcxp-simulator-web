@@ -1,7 +1,7 @@
 {
   "name": "@tcxp/tcxp",
   "version": "0.1.0",
-  "description": "Typed Context Protocol (tcxp) v0.1 reference engine: one-line addresses that parse into expression trees, carry their own context, and run",
+  "description": "Typed Context Protocol (tcxp) v0.2 reference engine: one-line addresses that parse into expression trees, carry their own context, and run",
   "keywords": ["tcxp", "typed-context-protocol", "uri", "query", "sql", "expression-tree", "decision-state", "provenance"],
   "author": "Ron Itelman",
   "license": "Apache-2.0",
@@ -20,8 +20,14 @@
     "build": "python3 src/build_core.py && python3 src/build.py",
     "verify": "node test/verify.mjs",
     "fuzz": "node test/fuzz.mjs 2000 7",
+    "fuzz:writes": "node test/fuzz.mjs 1000 11 --writes",
+    "compat": "node test/compat.mjs",
     "vectors": "node python/tools/export_vectors.mjs",
-    "gate": "node test/verify.mjs && node test/fuzz.mjs 2000 7"
+    "gate": "npm run build && node test/verify.mjs && npm run build && node test/fuzz.mjs 2000 7 && node test/fuzz.mjs 1000 11 --writes && node test/compat.mjs && node test/api.mjs && node test/intent.mjs && lean lean/Tcxp.lean",
+    "api": "node test/api.mjs",
+    "intent": "node test/intent.mjs"
   },
-  "devDependencies": { "@electric-sql/pglite": "0.5.8" }
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8"
+  }
 }
