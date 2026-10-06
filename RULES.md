@@ -182,6 +182,7 @@ Three sections: **Protocol** (what an address is and means), **SDK** (how this i
 |---|---|---|---|---|---|
 | R102 | Every change passes `npm run gate` before it is committed. | README | the gate itself | | |
 | R103 | Before a release, the Python package must reproduce `tcxp.js`'s output byte for byte over the vectors in `python/vectors/`. | §11 | `.github/workflows/release.yml` | | |
+| R106 | demo/tax-intake* is off-limits to agents. If a change would affect it, STOP and report; don't edit it. | — | — (process; the gate and the headless browser check no longer exercise the tax demo) | |  |
 
 ## Handler conventions
 
