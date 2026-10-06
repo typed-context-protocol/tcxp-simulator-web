@@ -968,7 +968,7 @@ function toSQL(tree, opts) {
   if (p.mode !== 'sql' && p.mode !== 'math' && p.mode !== 'write') return null;
   const params = []; const order = [];
   const gapless = !tree.gaps.length;
-  const bv = gapless ? boundValues(tree) : {vals:{}, via:{}};
+  const bv = gapless ? boundValues(tree) : {vals: dict(), via: dict()};
   const castSlots = p.mode === 'math';
   function slotRef(name) {
     let i = order.indexOf(name);
@@ -1757,7 +1757,7 @@ function registerCSV(registry, table, csvText, types) {
   const body = rows.slice(1).map((r, n) => { if (r.length > header.length) throw new TcxpError('CSV row ' + (n + 2) + ' has more cells than the header'); return header.map((_, i) => r[i] === undefined ? '' : r[i].trim()); });
   const given = types || {};
   const colTypes = header.map((h, i) => {
-    if (given[h]) return given[h];
+    if (own(given, h)) return own(given, h);
     const vals = body.map(r => r[i]).filter(v => v !== '');
     if (vals.length && vals.every(v => /^-?\d+$/.test(v))) return 'integer';
     if (vals.length && vals.every(v => /^-?\d+(\.\d+)?$/.test(v))) return 'numeric';
