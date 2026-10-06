@@ -83,7 +83,9 @@ for (const uri of corpus) {
 // 4. registerCSV: inference, quoting, empty cells; select * equals PostgreSQL loading the same rows through generated DDL and inserts
 {
   const csv = 'Name,"Amount, USD",Joined,Note\n"Ada, Countess",12.50,2024-01-31,"She said ""hi"""\nBob,3,2024-02-29,\nCleo,,2023-12-01,plain\n';
+  const existedBefore = Object.hasOwn(T.REGISTRIES, 'csvtest.demo');
   const def = T.registerCSV('csvtest.demo', 'people', csv);
+  tally('registerCSV creates a registry when the name is new', !existedBefore && Object.hasOwn(T.REGISTRIES, 'csvtest.demo'));
   tally('registerCSV infers types', JSON.stringify(def.columns.map(c => c[1])) === JSON.stringify(['integer', 'text', 'numeric', 'date', 'text']), JSON.stringify(def.columns));
   const pg = new PGlite(); await pg.exec(T.fullDDL('csvtest.demo'));
   const t = T.parseURI(T.fullAddress('!tcxp:/csvtest.demo/sql/select?cols=*&from=people&order=asc(row_id)'));
