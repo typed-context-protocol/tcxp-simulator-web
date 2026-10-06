@@ -37,7 +37,7 @@ const FIRM_SEED = {
   ]
 };
 
-/* Registries: the virtual, in-memory address space that !tcxp:/ resolves against.
+/* Registries: the virtual, in-memory address space that !tcxp:/ addresses name (they are not resolved).
    Each registry may hold a database (sql/select), functions (callable with @) and notes
    (facet content that annotations point to). math/eval is available in every registry. */
 const REGISTRIES = {

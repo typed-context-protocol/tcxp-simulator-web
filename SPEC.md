@@ -2,7 +2,7 @@
 
 Author: Ron Itelman · Status: working draft, October 2026 · Reference implementation: `tcxp.js`
 
-v0.2 adds writes (§12), one API to edit and query any address plus CSV data sources (§13), and intent rows that halt execution until required variables are bound (§14). Every v0.1 address parses, serializes and identifies exactly as before; the one visible change is that a gap's result kind is now called `halt` (§4). See `CHANGELOG.md`.
+v0.2 adds writes (§12), one API to edit and query any address plus CSV data sources (§13), and intent rows that halt execution until required variables are bound (§14). Every address in the v0.1 collection parses, serializes and identifies exactly as before; the visible changes are that a gap's result kind is now called `halt` (§4), and that an address must be spelled exactly in one of the two formats (§2). See `CHANGELOG.md`.
 
 ## 1. Purpose
 
@@ -12,21 +12,43 @@ The protocol constrains only the grammar. Anything expressible in the grammar is
 
 ## 2. Address forms
 
+tcxp has exactly two address formats. They are different states, not two spellings of one state, and both can exist on a registry.
+
+| Format | Meaning |
+|---|---|
+| `tcxp://…` | **Resolvable.** `tcxp://name` is an address in a registry, and that registry entry points to an external address (for example `https://…`). Resolving `tcxp://name` means looking up the name in the registry and returning the external address it points to. This is the URI scheme being registered with IANA. |
+| `!tcxp:/…` | **Virtual.** It is never resolved. |
+
+**Locked rule: reading never fetches.** Resolving a `tcxp://` address returns the external address it points to; it never fetches that external address.
+
+**`@` is a call marker, not a format.** It can go in front of either format: `@tcxp://…` or `@!tcxp:/…`.
+
+**Exact spelling.** An address is one of the two formats, optionally preceded by `@`, written exactly. There is no tolerance and no normalization: any other spelling is rejected with an error, never rewritten into a valid one. That includes:
+
+- `!tcxp://…` and `@!tcxp://…`: a virtual address written with two slashes
+- `!tcxp:///…`: empty segments after the scheme
+- `tcxp:/…`: a single slash without `!`
+- an empty path segment anywhere: `//` inside the path, or a trailing `/`
+- leading or trailing whitespace
+
+The rest of this specification, from §3 on, describes the virtual format.
+
+### The virtual format
+
 ```
-!tcxp:/<registry>/<path>?<key>=<value>&…&$<var>=<value>&…&~<meta>=<value>&…     an address (names a state)
-@!tcxp:/<registry>/<path>?<param>=<value>&…&~<meta>=<value>&…                   a call (invokes a handler)
+!tcxp:/<registry>/<path>?<key>=<value>&…&$<var>=<value>&…&~<meta>=<value>&…     names a state
+@!tcxp:/<registry>/<path>?<param>=<value>&…&~<meta>=<value>&…                   a call
 ```
 
-- **`!`** marks the string as a tcxp address and not a resolvable URI. Nothing on a network resolves it.
-- **`@`** in front means *call*: resolve the address in the registry of the system you are running in, then invoke the handler. On a write address (§12) it means *perform the write*; without `@` the same address only describes the write.
+- **`!`** marks the address as virtual. It is never resolved, on a network or anywhere else.
+- **`@`** in front means *call*: the system you are running in finds the named handler in its registry and invokes it. On a write address (§12) it means *perform the write*; without `@` the same address only describes the write.
 - **`<registry>`** is the first path segment. It names an in-memory, virtual registry (for example `school.demo`, `registry`).
-- **`<path>`** selects what inside the registry the address refers to. v0.2 defines:
+- **`<path>`** selects what inside the registry the address refers to. Every segment is non-empty. v0.2 defines:
   - `sql/select` (the SQL profile; the registry must hold a database)
   - `sql/insert`, `sql/update`, `sql/delete` (the write profiles, §12; the registry must hold a database)
   - `math/eval` (the math profile; available in every registry)
   - a function name (callable with `@`)
   - a note (`notes/…`, `rules/…`, `env/…`), which is text that annotation facets point to
-- The older `!tcxp://` form is accepted on input and normalized to `!tcxp:/`.
 
 ## 3. Key classes
 
@@ -103,7 +125,7 @@ A **spike** is one annotation. `on` lists pointers, so one spike can anchor to s
   - Conditions: when and where it holds true.
   - Consequences: how it should change the decision.
 
-Each facet holds a tcxp address of a note, inline text, or `null`. A facet is **lit** when it holds a value that resolves, and **dark** otherwise. A spike's state is three bits (meaning, structure, environment), so 8 states. Comparing two spikes is a bitwise check plus string equality on identities.
+Each facet holds a tcxp address of a note, inline text, or `null`. A facet is **lit** when it holds inline text or the address of a note that exists in the registry, and **dark** otherwise. A spike's state is three bits (meaning, structure, environment), so 8 states. Comparing two spikes is a bitwise check plus string equality on identities.
 
 A *reason card* is a spike whose meaning facet carries the human-readable definition of a decision.
 
