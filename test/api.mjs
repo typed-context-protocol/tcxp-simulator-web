@@ -92,6 +92,11 @@ for (const uri of corpus) {
   tally('registerCSV table equals PostgreSQL', JSON.stringify(mem) === JSON.stringify(pr), JSON.stringify([mem, pr]));
   let threw = false; try { T.registerCSV('csvtest.demo', 'bad', 'a,b\n1,2,3\n'); } catch (e) { threw = e instanceof T.TcxpError; }
   tally('registerCSV rejects ragged rows', threw);
+  // a column named like an Object.prototype member gets an inferred type, never a prototype member
+  for (const h of ['constructor', 'toString', 'hasOwnProperty']) {
+    const d = T.registerCSV('csvtest.demo', 'protohdr', h + ',plain\n1,2\n');
+    tally('registerCSV header named ' + h + ' is an ordinary column', d.columns[1][1] === d.columns[2][1] && d.columns[1][1] === 'integer', JSON.stringify(d.columns.map(c => typeof c[1] === 'function' ? 'FUNCTION' : c[1])));
+  }
   delete T.REGISTRIES['csvtest.demo'];
 }
 // 5. JavaScript-special names (constructor, __proto__, …) behave exactly like an ordinary unknown name in every
