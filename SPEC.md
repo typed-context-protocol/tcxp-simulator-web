@@ -51,6 +51,14 @@ tcxp has exactly two address formats. They are different states, not two spellin
 - an empty path segment anywhere: `//` inside the path, or a trailing `/`
 - leading or trailing whitespace
 
+### The resolvable format in the v0.2 engine
+
+- **Shape.** `tcxp://<registry>/<path>`, every segment non-empty, followed only by `~meta` keys (no data keys, no bindings). The registry need not exist and the address need not be registered for it to parse: parsing never looks anything up.
+- **Reading.** `execute` on a `tcxp://` address returns `{kind:"resolvable", address, registered, location}`: where its entry points, or `registered:false, location:null`. It never fetches.
+- **Resolving.** `resolve(address, {fetcher, base})` returns a promise of the content (text). Lookup is an exact match of `address` against the entries, so `~meta` is part of the string. `file:` locations with a relative path (`file:fixtures/x.md`) are read relative to `base`, which defaults to the directory holding `tcxp.js` (in a browser, the page); `file:///…` is absolute; `http:` and `https:` use `fetch`. A `fetcher(location, {base})` can replace the default. Errors carry a `code`: `not-registered`, `fetch-failed`, `not-resolvable` (a virtual address), `not-supported` (`@tcxp://`).
+- **Registering.** `registerResolvable(entry | entries)` adds `{address, location}` entries in order; errors carry `code` `duplicate`, `location` (no scheme, or a tcxp location) or `register` (not an exact `tcxp://<registry>/<path>`). `listResolvable(registry?)` lists them in order. Registering under a registry that does not exist creates it.
+- **Calls.** `@tcxp://…` parses as a call; executing or resolving it throws `not-supported`: external calls are not built.
+
 The rest of this specification, from §3 on, describes the virtual format.
 
 ### The virtual format
@@ -188,7 +196,8 @@ These are declared out of scope, and the test suite lists them: table aliases, D
 - **Session data:** `newStore`, `resetData`, `dataChanged`, `tableRows`
 - **Edit and query (v0.2, §13):** `edit(uri, ops, opts)`, `query(uri, selector)`, `fromJSON(json)`, `exprText(node)`
 - **Intent rows (v0.2, §14):** `resultKey(tree)`
-- **Result kinds of `execute`:** `rows` (select), `value` (math), `call`, `address` (a function named without `@`), `note`, `preview` and `write` (§12), and `halt` (a gap, §4 and §14). Errors and refusals throw a `TcxpError` with a `code`.
+- **Resolvable entries (v0.2, §2):** `RESOLVABLE`, `registerResolvable(entries)`, `listResolvable(registry?)`, `resolve(address, {fetcher, base})`, the only function that fetches
+- **Result kinds of `execute`:** `rows` (select), `value` (math), `call`, `address` (a function named without `@`), `note`, `preview` and `write` (§12), `halt` (a gap, §4 and §14), and `resolvable` (a `tcxp://` address: where it points, never fetched, §2). Errors and refusals throw a `TcxpError` with a `code`.
 - **Data sources (v0.2, §13):** `registerCSV(registry, table, csvText, types)`
 - **Testing:** `FilterGenerator` (seeded random addresses; `nextWrite()` for random writes; `FilterGenerator.filter(uri)` to check any address against the rules)
 

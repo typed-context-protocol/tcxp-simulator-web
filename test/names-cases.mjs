@@ -8,6 +8,8 @@ export const nameCases = n => [
   ['call registry', '@!tcxp:/' + n + '/hello?do=x'],
   ['path', '!tcxp:/school.demo/' + n],
   ['call path', '@!tcxp:/registry/' + n + '?do=x'],
+  ['resolvable registry', 'tcxp://' + n + '/notes/x'],
+  ['resolvable path', 'tcxp://firm.demo/rules/' + n],
   ['note path', '!tcxp:/registry/notes/' + n],
   ['select key', S + n + '=1&cols=*&from=students'],
   ['write key', '!tcxp:/school.demo/sql/delete?from=students&' + n + '=1'],

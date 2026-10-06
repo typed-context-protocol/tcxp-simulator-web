@@ -5,7 +5,8 @@
 
 class TcxpError extends Error { constructor(msg, where, code) { super(msg); this.where = where; if (code) this.code = code; } }
 
-const SCHEME = '!tcxp:/';
+const SCHEME = '!tcxp:/';          // the virtual format: never resolved
+const RESOLVABLE = 'tcxp://';      // the resolvable format: a registry entry that points to an external location
 // Names in an address are data, never JavaScript: "constructor" or "__proto__" must behave like any unknown name.
 // own() reads only an object's own properties; dict() is a map with no prototype; setOwn() defines a key even
 // when it is "__proto__".
@@ -219,19 +220,137 @@ function route(registry, path) {
   throw new TcxpError('Nothing at "' + registry + '/' + path + '". Try sql/select, sql/insert, sql/update, sql/delete, math/eval, a function or a note.', 'path');
 }
 
-function parseURI(input) {
-  let uri = (input || '').trim();
-  let call = false;
-  if (uri.startsWith(CALL)) { call = true; uri = uri.slice(1); }
-  if (!uri.startsWith(SCHEME)) throw new TcxpError('An address starts with "!tcxp:/" (or "@!tcxp:/" to call a function)', 'scheme');
-  let rest = uri.slice(SCHEME.length);
-  if (rest.startsWith('/')) rest = rest.slice(1);           // tolerate the older "!tcxp://" form
+// Exactly two address formats, optionally preceded by "@": "!tcxp:/<registry>/<path>" (virtual) and
+// "tcxp://<registry>/<path>" (resolvable). Input must be exact: no trimming, no rewriting, no empty segments.
+function scanAddress(input) {
+  const bad = msg => { throw new TcxpError(msg, 'scheme', 'scheme'); };
+  const uri = typeof input === 'string' ? input : '';
+  if (uri !== uri.trim()) bad('An address cannot begin or end with whitespace');
+  let rest = uri, call = false;
+  if (rest.startsWith(CALL)) { call = true; rest = rest.slice(1); }
+  let form;
+  if (rest.startsWith(SCHEME)) {
+    rest = rest.slice(SCHEME.length); form = 'virtual';
+    if (rest.startsWith('//')) bad('"!tcxp:///" has empty path segments: a virtual address is "!tcxp:/<registry>/<path>"');
+    if (rest.startsWith('/')) bad('"!tcxp://" is not an address format: a virtual address is "!tcxp:/" (one slash), and a resolvable one is "tcxp://" (no "!")');
+  } else if (rest.startsWith(RESOLVABLE)) {
+    rest = rest.slice(RESOLVABLE.length); form = 'resolvable';
+    if (rest.startsWith('/')) bad('"tcxp:///" has an empty registry: a resolvable address is "tcxp://<registry>/<path>"');
+  } else if (rest.startsWith('tcxp:/')) {
+    bad('"tcxp:/" with one slash is not an address format: write "!tcxp:/" (virtual) or "tcxp://" (resolvable)');
+  } else {
+    bad('An address is exactly "!tcxp:/<registry>/<path>" (virtual) or "tcxp://<registry>/<path>" (resolvable), optionally preceded by "@" to call it');
+  }
   const qi = rest.indexOf('?');
   const hierarchy = qi < 0 ? rest : rest.slice(0, qi);
   const query = qi < 0 ? '' : rest.slice(qi + 1);
-  const segs = hierarchy.split('/').filter(Boolean);
-  if (!segs.length) throw new TcxpError('Missing registry after !tcxp:/', 'registry');
-  const registry = segs[0], path = segs.slice(1).join('/');
+  if (!hierarchy) throw new TcxpError('Missing registry after ' + (form === 'virtual' ? SCHEME : RESOLVABLE), 'registry', 'scheme');
+  const segs = hierarchy.split('/');
+  if (segs.some(x => x === '')) bad('Empty path segment in "' + hierarchy + '": no "//" inside the path and no trailing "/"');
+  return {call, form, registry: segs[0], path: segs.slice(1).join('/'), query};
+}
+// A resolvable address (tcxp://<registry>/<path>) is a reference to a registry entry. Parsing it never looks
+// anything up and never fetches. It takes ~meta keys only.
+function parseResolvable(call, registry, path, query) {
+  if (!path) throw new TcxpError('A resolvable address is "tcxp://<registry>/<path>"; "' + RESOLVABLE + registry + '" has no path', 'path', 'scheme');
+  const meta = [];
+  splitPairs(query).forEach(([k, v]) => {
+    if (k[0] !== '~') throw new TcxpError('A resolvable address (tcxp://…) takes no keys other than ~meta; "' + k + '" is not allowed', k);
+    const name = k.slice(1);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new TcxpError('Bad meta key "' + k + '"', k);
+    if (meta.some(m => m[0] === name)) throw new TcxpError('Meta key ' + k + ' appears twice', k);
+    meta.push([name, parseMetaValue(v, name)]);
+  });
+  const parsed = {call, form: 'resolvable', registry, path, mode: 'resolvable', items: dict(), bindings: dict(), meta};
+  const root = {kind: 'reference', name: registry + '/' + path, role: 'resolvable', type: 'location'};
+  const diagnostics = call ? [{level: 'info', msg: 'Calling a resolvable address (@tcxp://…) is not supported yet: external calls are not built.'}] : [];
+  // ~intent rows may describe the address, but cannot require variables: a resolvable address takes no bindings.
+  const intentMeta = meta.find(m => m[0] === 'intent');
+  if (readIntent(intentMeta ? intentMeta[1] : undefined, diagnostics).length)
+    diagnostics.push({level: 'error', msg: 'A resolvable address cannot require variables in ~intent: it takes no $bindings'});
+  const tree = {root, parsed, slots: [], diagnostics, intentSlots: [], required: [], gaps: []};
+  tree.spikes = readSpikes(tree);
+  tree.spikes.forEach(sp => sp.problems.forEach(msg => diagnostics.push({level: 'warn', msg: 'Annotation ' + sp.id + ': ' + msg})));
+  return tree;
+}
+
+/* ----------------------------------------------- resolvable entries */
+// A registry holds an ordered list of resolvable entries {address, location}. The address is an exact tcxp://
+// address whose first segment names the registry; the location is an external, non-tcxp location. Lookup is an
+// exact string match. Only resolve() fetches, and only when called; nothing else in the engine ever does.
+const LOCATION_SCHEME = /^([A-Za-z][A-Za-z0-9+.-]*):/;
+function registerResolvable(entries) {
+  (Array.isArray(entries) ? entries : [entries]).forEach(e => {
+    const bad = (msg, code) => { throw new TcxpError(msg, 'register', code || 'register'); };
+    if (!e || typeof e !== 'object' || typeof e.address !== 'string' || typeof e.location !== 'string') bad('A resolvable entry is {"address": "tcxp://…", "location": "<external location>"}');
+    let tree;
+    try { tree = parseURI(e.address); } catch (err) { bad('Entry address ' + JSON.stringify(e.address) + ' is not an address: ' + err.message); }
+    if (tree.parsed.form !== 'resolvable') bad('Only tcxp:// addresses are registered; ' + e.address + ' is virtual and is never resolved');
+    if (tree.parsed.call || tree.parsed.meta.length || serialize(tree).uri !== e.address) bad('An entry address is exactly "tcxp://<registry>/<path>", with no "@" and no ~meta: ' + JSON.stringify(e.address));
+    const m = LOCATION_SCHEME.exec(e.location);
+    if (!m) bad('Location ' + JSON.stringify(e.location) + ' for ' + e.address + ' needs a scheme, such as https: or file:', 'location');
+    if (m[1].toLowerCase() === 'tcxp') bad('Location ' + JSON.stringify(e.location) + ' for ' + e.address + ' is a tcxp address; an entry must point to an external location (no chains)', 'location');
+    const registry = tree.parsed.registry;
+    const reg = own(REGISTRIES, registry) || setOwn(REGISTRIES, registry, {title: registry, description: 'Registry with resolvable entries.', fns: dict(), notes: dict()});
+    if (!Object.hasOwn(reg, 'resolvable')) reg.resolvable = [];
+    if (reg.resolvable.some(x => x.address === e.address)) bad(e.address + ' is already registered', 'duplicate');
+    reg.resolvable.push({address: e.address, location: e.location});
+  });
+}
+// Entries in order: one registry's, or every registry's (registries in order, entries in registration order).
+function listResolvable(registry) {
+  const regs = registry === undefined ? Object.keys(REGISTRIES) : [registry];
+  return regs.flatMap(r => { const reg = own(REGISTRIES, r); return reg && Object.hasOwn(reg, 'resolvable') ? reg.resolvable.map(e => ({address: e.address, location: e.location})) : []; });
+}
+function lookupResolvable(address) {
+  for (const r of Object.keys(REGISTRIES)) { const reg = own(REGISTRIES, r); if (reg && Object.hasOwn(reg, 'resolvable')) { const e = reg.resolvable.find(x => x.address === address); if (e) return e; } }
+  return null;
+}
+// The default fetcher reads file: locations (Node: from disk, relative paths against opts.base, which defaults
+// to the directory holding tcxp.js; browsers: relative to the page) and http(s): locations with fetch().
+const ENGINE_DIR = typeof __dirname === 'string' ? __dirname : null;
+async function defaultFetcher(location, opts) {
+  const scheme = (LOCATION_SCHEME.exec(location) || [])[1].toLowerCase();
+  const isNode = typeof process !== 'undefined' && process.versions && process.versions.node && typeof require === 'function';
+  if (scheme === 'file') {
+    const rest = location.slice(5);
+    if (isNode) {
+      const path = require('path'), url = require('url'), fs = require('fs');
+      const file = rest.startsWith('//') ? url.fileURLToPath(location) : path.resolve(opts.base || ENGINE_DIR || '.', decodeURIComponent(rest));
+      return fs.promises.readFile(file, 'utf8');
+    }
+    if (typeof fetch !== 'function') throw new Error('this environment cannot read file: locations');
+    const res = await fetch(new URL(rest.startsWith('//') ? location : rest, opts.base || (typeof document !== 'undefined' ? document.baseURI : undefined)));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.text();
+  }
+  if (scheme === 'https' || scheme === 'http') {
+    if (typeof fetch !== 'function') throw new Error('this environment has no fetch()');
+    const res = await fetch(location);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.text();
+  }
+  throw new Error('no fetcher for ' + scheme + ': locations');
+}
+// resolve(address, {fetcher, base}) -> Promise<content>. The only function that fetches.
+async function resolve(address, opts) {
+  opts = opts || {};
+  const tree = parseURI(address);
+  if (tree.parsed.form !== 'resolvable') throw new TcxpError(address + ' is virtual: !tcxp:/ addresses are never resolved', 'resolve', 'not-resolvable');
+  if (tree.parsed.call) throw notSupportedCall();
+  const entry = lookupResolvable(address);
+  if (!entry) throw new TcxpError(address + ' is not registered', 'resolve', 'not-registered');
+  let content;
+  try { content = await (opts.fetcher || defaultFetcher)(entry.location, {base: opts.base}); }
+  catch (e) { throw new TcxpError('Fetching ' + entry.location + ' for ' + address + ' failed: ' + (e && e.message || e), 'resolve', 'fetch-failed'); }
+  if (typeof content !== 'string') throw new TcxpError('Fetching ' + entry.location + ' for ' + address + ' failed: the fetcher returned no text', 'resolve', 'fetch-failed');
+  return content;
+}
+const notSupportedCall = () => new TcxpError('External calls are not supported yet: @tcxp:// parses as a call on a resolvable address, but invoking an external handler is not built', 'call', 'not-supported');
+
+function parseURI(input) {
+  const {call, form, registry, path, query} = scanAddress(input);
+  if (form === 'resolvable') return parseResolvable(call, registry, path, query);
   const r = route(registry, path);
   if (call && r.mode !== 'fn' && r.mode !== 'write') throw new TcxpError('"@" calls a function or performs a write, and ' + registry + '/' + path + ' is neither', 'call');
 
@@ -566,8 +685,8 @@ function serialize(tree, opts) {
     push(')', 'punct');
   }
   if (parsed.call) push('@', 'call', tree.root);
-  push('!tcxp:/', 'scheme'); push(parsed.registry, 'registry');
-  push('/' + parsed.path, 'path', parsed.mode === 'fn' ? tree.root.children[0] : parsed.mode === 'note' ? tree.root : (parsed.mode === 'sql' || parsed.mode === 'write' ? tree.root : null));
+  push(parsed.form === 'resolvable' ? RESOLVABLE : SCHEME, 'scheme'); push(parsed.registry, 'registry');
+  push('/' + parsed.path, 'path', parsed.mode === 'fn' ? tree.root.children[0] : parsed.mode === 'note' || parsed.mode === 'resolvable' ? tree.root : (parsed.mode === 'sql' || parsed.mode === 'write' ? tree.root : null));
   let first = true;
   const sep = () => { push(first ? '?' : '&', 'punct'); first = false; };
   if (parsed.mode === 'sql') {
@@ -756,7 +875,7 @@ function toJSON(tree) {
   };
   const p = tree.parsed;
   return {
-    address: identity(tree), call: p.call, registry: p.registry, path: p.path, profile: p.mode,
+    address: identity(tree), call: p.call, ...(p.form === 'resolvable' ? {form: 'resolvable'} : {}), registry: p.registry, path: p.path, profile: p.mode,
     tree: clean(tree.root), gaps: tree.gaps,
     meta: Object.fromEntries(p.meta),
     ...(tree.intentSlots && tree.intentSlots.length ? {requires: tree.intentSlots.map(clean)} : {}),
@@ -787,6 +906,12 @@ function execute(tree, opts) {
 function executeReady(tree, opts) {
   const p = tree.parsed;
   if (p.mode === 'note') return {kind:'note', text: p.note};
+  // Reading a resolvable address shows where its entry points. It never fetches; only resolve() does.
+  if (p.mode === 'resolvable') {
+    if (p.call) throw notSupportedCall();
+    const e = lookupResolvable(identity(tree));
+    return {kind:'resolvable', address: identity(tree), registered: !!e, location: e ? e.location : null};
+  }
   if (p.mode === 'fn') return p.call ? {kind:'call', value: invoke(tree), returns: p.fn.returns} : {kind:'address'};
   const {vals} = boundValues(tree);
   if (p.mode === 'math') {
@@ -1387,7 +1512,7 @@ function query(uri, selector) {
 
 // fromJSON: the inverse of toJSON. It rebuilds the address from the tree, profile and meta alone.
 function fromJSON(j) {
-  const head = (j.call ? CALL : '') + SCHEME + j.registry + '/' + j.path;
+  const head = (j.call ? CALL : '') + (j.form === 'resolvable' ? RESOLVABLE : SCHEME) + j.registry + '/' + j.path;
   const pairs = [], binds = [], seen = new Set();
   const jt = n => n.kind === 'value' ? exprValText(n) : n.kind === 'slot' ? '$' + n.name : n.kind === 'reference' ? n.name : n.op + '(' + (n.children || []).map(jt).join(',') + ')';
   const callText = c => { const [h, ...params] = c.children; return CALL + SCHEME + h.name + (params.filter(p => p.children).length ? '?' + params.filter(p => p.children).map(p => p.name + '=' + encLiteral(String(p.children[0].value))).join('&') : ''); };
@@ -1475,9 +1600,9 @@ function withPulse(tree, step, at, debounce, parent, extra) {
 // FilterGenerator produces random, well-formed tcxp addresses (seeded, reproducible) and filters
 // any address against the protocol rules. Generated batches double as property tests.
 const RULES = [
-  ['scheme', 'Starts with !tcxp:/ (an address) or @!tcxp:/ (a call)'],
+  ['scheme', 'Starts with exactly !tcxp:/ (virtual) or tcxp:// (resolvable), optionally after @'],
   ['meta-last', 'Every ~meta key comes after every other key'],
-  ['call-target', '@ is only used on a function address or a write'],
+  ['call-target', '@ is only used on a function, a write or a resolvable address'],
   ['grammar', 'Parses under the profile grammar with no errors'],
   ['canonical', 'Re-serializes to exactly the same string']
 ];
@@ -1726,13 +1851,13 @@ class FilterGenerator {
   // Check any address against the protocol rules. Returns {ok, rules:[{id, name, pass, msg}]}.
   static filter(uri) {
     const res = {}; let tree = null, err = null;
-    res.scheme = /^@?!tcxp:\//.test(uri);
+    res.scheme = /^@?(?:!tcxp:\/(?!\/)|tcxp:\/\/(?!\/))/.test(uri);
     let keys = [];
     try { const q = uri.indexOf('?'); keys = q < 0 ? [] : splitPairs(uri.slice(q + 1)).map(p => p[0]); } catch (e) { err = e; }
     const firstMeta = keys.findIndex(k => k[0] === '~');
     res['meta-last'] = firstMeta < 0 || keys.slice(firstMeta).every(k => k[0] === '~');
     try { tree = parseURI(uri); } catch (e) { err = e; }
-    res['call-target'] = !uri.startsWith('@') || !!(tree && (tree.parsed.mode === 'fn' || tree.parsed.mode === 'write'));
+    res['call-target'] = !uri.startsWith('@') || !!(tree && (tree.parsed.mode === 'fn' || tree.parsed.mode === 'write' || tree.parsed.mode === 'resolvable'));
     res.grammar = !!tree && !tree.diagnostics.some(d => d.level === 'error');
     res.canonical = !!tree && serialize(tree).uri === uri;
     const rules = RULES.map(([id, name]) => ({id, name, pass: res[id], msg: !res[id] && err && ['grammar', 'call-target'].includes(id) ? err.message : null}));

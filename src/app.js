@@ -13,6 +13,7 @@ const JOIN_TAG = {inner:'INNER', left:'LEFT', full:'FULL OUTER', right:'RIGHT', 
 function queryTag(q) {
   const w = q.uri.match(/\/sql\/(insert|update|delete)\?/);
   if (w) return w[1].toUpperCase();
+  if (/^@?tcxp:\/\//.test(q.uri)) return 'RESOLVABLE';
   if (q.uri.startsWith('@')) return '@ CALL';
   if (q.uri.includes('/math/eval')) return 'MATH';
   const m = q.uri.match(/join=(inner|left|full|right|cross)\(/);
@@ -28,7 +29,10 @@ function renderExplorer() {
     const fns = Object.keys(r.fns).map(f => `<button class="ex-item" data-uri="${esc('@!tcxp:/' + name + '/' + f)}"><span class="t"><code>${esc(f)}</code></span><span class="meta">function</span></button>`).join('');
     const notes = Object.keys(r.notes).map(n => `<button class="ex-item" data-uri="${esc('!tcxp:/' + name + '/' + n)}"><span class="t"><code>${esc(n)}</code></span><span class="meta">note</span></button>`).join('');
     const schema = r.db ? `<button class="ex-item" data-schema="${name}"><span class="t">Data dictionary and DDL</span><span class="meta">${r.db.schema.tables.length} tables</span></button>` : '';
-    return `<div class="ex-group-label"><code>${esc(name)}</code> · ${esc(r.description)}</div>${schema}${tables}${fns}${notes}`;
+    const entries = T.listResolvable(name);
+    const links = entries.length ? `<table class="grid resolvable-list"><thead><tr><th>Resolvable address</th><th>Location</th></tr></thead><tbody>${entries.map(e =>
+      `<tr><td><button class="ex-link" data-uri="${esc(e.address)}"><code>${esc(e.address)}</code></button></td><td><code>${esc(e.location)}</code></td></tr>`).join('')}</tbody></table>` : '';
+    return `<div class="ex-group-label"><code>${esc(name)}</code> · ${esc(r.description)}</div>${schema}${tables}${fns}${notes}${links}`;
   }).join('');
   const groups = T.GROUPS.map(([g, label]) => {
     const items = T.QUERIES.filter(q => q.group === g).map(q =>
@@ -41,6 +45,7 @@ function renderExplorer() {
     <details class="ex-section" open><summary>Registries</summary>${regs}</details>`;
   $('#explorer').addEventListener('click', e => {
     if (e.target.closest('#gen-one')) { state.gen = state.gen || new T.FilterGenerator(Date.now() % 100000); loadURI(state.gen.next()); return; }
+    const lk = e.target.closest('.ex-link'); if (lk) { loadURI(lk.dataset.uri); return; }
     const b = e.target.closest('.ex-item'); if (!b) return;
     if (b.dataset.query) selectQuery(b.dataset.query);
     else if (b.dataset.table) { const [r, t] = b.dataset.table.split('|'); openTable(r, t, b); }
@@ -73,7 +78,7 @@ const metaOf = (tree, key) => { const m = tree.parsed.meta.find(x => x[0] === ke
 const intentLabel = tree => { const v = metaOf(tree, 'intent'); if (typeof v === 'string') return v; const u = Array.isArray(v) ? v.find(r => r && r.role === 'user' && typeof r.text === 'string') : null; return u ? u.text : null; };
 
 function update(uri) {
-  state.uri = uri.trim();
+  state.uri = uri;   // exactly as typed: the engine rejects whitespace and every other non-exact spelling
   const q = T.QUERIES.find(x => x.id === state.queryId);
   $('#reset-uri').hidden = !(q && q.uri !== state.uri);
   let tree = null, err = null;
@@ -125,6 +130,7 @@ function nodeText(n) {
     if (n.role === 'table') return [n.name, 'table'];
     if (n.role === 'handler') return [n.name, 'handler → ' + n.type];
     if (n.role === 'note') return [n.name, 'note'];
+    if (n.role === 'resolvable') return [n.name, 'resolvable entry'];
     if (n.role === 'alias') return [n.name, 'alias' + (n.type ? ' · ' + T.baseType(n.type) : '')];
     return [n.name, n.type ? T.baseType(n.type) : 'column'];
   }
@@ -236,6 +242,7 @@ function snapshotCheck(tree, res) {
     return res.count === s.count && JSON.stringify(res.returning.columns) === JSON.stringify(s.columns) && unordered(res.returning.rows.map(r => r.map(norm))) === unordered(s.rows);
   }
   if (res.kind === 'error') return s.kind === 'error' && s.code === res.code;
+  if (res.kind === 'resolvable') return s.kind === 'resolvable' && s.location === res.location && s.registered === res.registered;
   if (s.kind !== res.kind) return false;
   if (s.kind === 'halt') return JSON.stringify(s.gaps) === JSON.stringify(res.gaps);
   if (s.kind === 'value') return norm(res.value) === s.value;
@@ -307,6 +314,20 @@ function renderResult(tree) {
     title.textContent = 'Function';
     card.innerHTML = `<div class="returned"><span>${esc(tree.parsed.fn.doc)}</span><span style="color:var(--ink-3);font-size:13px">This address names the function. Put <code>@</code> in front to call it.</span><div><button class="btn small" id="call-it" type="button">Call it</button></div></div>`;
     $('#call-it').onclick = () => loadURI('@' + T.serialize(tree).uri);
+  } else if (res.kind === 'resolvable') {
+    // Shows where the entry points. Nothing is fetched until "Resolve" is pressed.
+    title.textContent = 'Resolvable address';
+    card.innerHTML = res.registered
+      ? `<div class="returned"><span>Its registry entry points to</span><code class="big" style="font-size:15px">${esc(res.location)}</code>
+         <span style="color:var(--ink-3);font-size:13px">Reading never fetches. Resolve fetches and shows the content at this location.</span>
+         <div><button class="btn small primary" id="resolve-it" type="button">Resolve</button></div><div id="resolved"></div></div>`
+      : `<div class="err-box">${esc(res.address)} is not registered. Registered entries are listed under each registry in the explorer.</div>`;
+    const btn = $('#resolve-it');
+    if (btn) btn.onclick = () => {
+      const out = $('#resolved'); out.innerHTML = '<span style="color:var(--ink-3)">Fetching…</span>';
+      T.resolve(res.address).then(text => { out.innerHTML = `<div class="sub-h">Content</div><pre class="code" style="white-space:pre-wrap">${esc(text)}</pre>`; },
+        err => { out.innerHTML = `<div class="err-box">${esc(err.message)}</div>`; });
+    };
   } else if (res.kind === 'note') {
     title.textContent = 'Note';
     card.innerHTML = `<div class="returned"><span style="font-size:15px">${esc(res.text)}</span><span style="color:var(--ink-3);font-size:13px">Annotations point at this address to light up a facet.</span></div>`;
@@ -627,7 +648,7 @@ function syncAddressBar() {
 function readHash() {
   let h = location.hash.slice(1);
   try { h = decodeURI(h); } catch (e) {}
-  return h.startsWith('!tcxp:/') || h.startsWith('@!tcxp:/') ? h : null;
+  return ['!tcxp:/', '@!tcxp:/', 'tcxp://', '@tcxp://'].some(p => h.startsWith(p)) ? h : null;
 }
 
 /* ------------------------------------------------------------------- chat */

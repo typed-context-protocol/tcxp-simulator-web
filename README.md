@@ -53,6 +53,7 @@ In the workbench:
 - **Writes** preview first. *Run this write* applies it once; *Undo* runs its inverse; *Reset data* restores the shipped rows. Opening an `@` write link only previews it.
 - **Find** (under the tree) takes `gaps`, `variables`, `references:gpa`, `operators:eq`, `annotations` or `pointer:/where/0`; hovering a result highlights the node.
 - **Halts** list every missing variable and the intent rows that require it, with a box to bind each one.
+- **Resolvable entries** are listed under each registry as address → location. Opening a `tcxp://` address shows its location; only the *Resolve* button fetches and shows the content.
 
 **Tax intake demo.** `tax-intake.html` is a small app built only on `tcxp.js`, which it loads from next to it. A manager's checklist rule ("the user must state the tax year", *If missing: HALT*) requires `$tax_year`. Ask *"What are the US hours worked in my client CSV?"* and the address halts; the chat then asks for the year. Asking is the app's handler for a halt, not a protocol mode. Reply *2024* and it runs: 59.25 hours. Its sources are in `demo/` (`python3 demo/build_demo.py` writes an inline single-file build and a linked build into `demo/`; the linked build is `tax-intake.html`).
 
@@ -68,11 +69,13 @@ In the workbench:
 | `lean/LEAN.md` | What is proved, and the order of the remaining proofs |
 | `src/` | Sources: `engine.js` (protocol), `_school.js`, `data_tail.js` and `data_csv.js` (registries, schemas, seed data, CSV, addresses), `app.js`, `shell.html`, build scripts |
 | `tax-intake.html`, `demo/` | Tax intake demo built on `tcxp.js` |
+| `fixtures/` | Local files the demo `tcxp://` entries point to, so resolving works offline |
 | `test/verify.mjs` | Every collection address and construct probe against PostgreSQL (writes in a fresh database each, with their inverses); writes `snapshot.json` |
 | `test/fuzz.mjs` | Random read addresses against the rules and PostgreSQL; `--writes` for random writes and inverses |
 | `test/compat.mjs` | v0.1 backward compatibility against the frozen `test/v01-baseline.json` and `test/v01-stream.json` |
 | `test/api.mjs` | `edit`, `query`, `fromJSON`, `registerCSV`, and JavaScript-special names |
 | `test/intent.mjs` | Intent rows: required variables halt, identity is unchanged, ASK and ACT are reserved |
+| `test/formats.mjs` | The two address formats spelled exactly (one rejection per aberration), resolvable entries, and resolve as the only fetch |
 | `python/` | The Python package `tcxp`: a conformance port of `tcxp.js`, checked against vectors exported from it |
 | `.github/workflows/release.yml` | Release on a version tag: gate, Python vectors, TestPyPI, then npm and PyPI after approval |
 | `LICENSE` | Apache-2.0 |
@@ -133,6 +136,7 @@ node test/fuzz.mjs 1000 11 --writes   # 1,000 random writes and their inverses a
 node test/compat.mjs            # every v0.1 address and seeded read stream still identical (test/v01-*.json)
 node test/api.mjs               # edit / query / fromJSON / registerCSV properties, JS-special names
 node test/intent.mjs            # ~intent rows: required variables halt, identity unchanged, ASK/ACT reserved
+node test/formats.mjs           # exact address formats, resolvable entries, no fetch except resolve
 lean lean/Tcxp.lean             # Lean 4.19+, no sorry
 ```
 

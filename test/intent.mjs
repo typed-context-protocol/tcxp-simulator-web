@@ -19,6 +19,16 @@ const randomRows = () => {
 for (const uri of corpus) {
   const t = T.parseURI(uri);
   const id = T.identity(t);
+  // A resolvable address (tcxp://) takes no bindings: an intent row that requires a variable is an error there,
+  // and rows that require nothing are meta like any other (identity unchanged).
+  if (t.parsed.form === 'resolvable') {
+    let err = null;
+    try { T.edit(uri, [{op: 'meta', key: 'intent', value: [{role: 'manager', text: 'State the reason.', require: '$req_reason'}]}], {pulse: false}); } catch (e) { err = e; }
+    tally('a resolvable address cannot require variables (error, never a silent pass)', !!err && /cannot require variables/.test(err.message), uri);
+    const plain = T.edit(uri, [{op: 'meta', key: 'intent', value: [{role: 'user', text: 'Which rule applies?'}]}], {pulse: false});
+    tally('intent rows never change identity (add)', T.identity(plain.tree) === id, plain.uri);
+    continue;
+  }
   // legacy string intents: unchanged string, no requirements, same result as with the intent removed
   const legacy = metaOf(t, 'intent');
   if (typeof legacy === 'string') {

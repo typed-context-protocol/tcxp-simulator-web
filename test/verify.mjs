@@ -74,6 +74,7 @@ for (const c of cases) {
       }
       if (c.ref) { const inl = T.toSQL(tree, {inline: true}).sql.replace(/\s+/g, ' '); if (inl !== c.ref) { ok = false; console.log('  inline:', inl, '\n  ref:   ', c.ref); } }
     } else if (mem.kind === 'call') { results[id] = {kind: 'call', value: mem.value}; detail = 'call -> ' + mem.value; }
+    else if (mem.kind === 'resolvable') { results[id] = {kind: 'resolvable', registered: mem.registered, location: mem.location}; detail = 'resolvable -> ' + mem.location + ' (not fetched)'; }
     if (!rt) detail += ' ROUNDTRIP';
     if (!strictRt) detail += ' STRICT-ROUNDTRIP';
     if (!ok) fail++;

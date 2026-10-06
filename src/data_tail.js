@@ -213,9 +213,13 @@ const QUERIES = [
     C + CSV_ALL + '&$tax_year=2024&' + intentRows([USER_ROW, MANAGER_ROW]),
     "SELECT sum(hours) AS us_hours FROM client_hours WHERE work_country = 'US'"),
   Q('intent-halt-implied','intent','if_empty omitted: HALT is the default','What are the US hours worked in my client CSV?',
-    C + CSV_ALL + '&' + intentRows([USER_ROW, {role: 'manager', text: MANAGER_ROW.text, require: '$tax_year'}]))
+    C + CSV_ALL + '&' + intentRows([USER_ROW, {role: 'manager', text: MANAGER_ROW.text, require: '$tax_year'}])),
+  // Resolvable: a registry entry that points to an external location (see data_resolvable.js). Reading shows the
+  // location; only an explicit resolve fetches the content. The virtual note with the same path is a different state.
+  Q('resolvable-tax-year','resolvable','Resolvable entry: the tax-year rule','Where does tcxp://firm.demo/rules/tax-year point?',
+    'tcxp://firm.demo/rules/tax-year')
 ];
 const GROUPS = [
   ['students','School · students table'],['submissions','School · submissions table'],['joins','School · joins'],
-  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes'],['csv','Client CSV'],['intent','Intent rows']
+  ['composed','School · composed'],['calls','Calls'],['math','Math and decisions'],['tax','Firm · tax hours'],['writes','Writes'],['csv','Client CSV'],['intent','Intent rows'],['resolvable','Resolvable (tcxp://)']
 ];
