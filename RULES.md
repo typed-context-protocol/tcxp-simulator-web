@@ -168,6 +168,7 @@ Three sections: **Protocol** (what an address is and means), **SDK** (how this i
 | R95 | `query` supports gaps, variables, references[:name], operators[:op], annotations and pointer:<path>, and every pointer it returns resolves. | §13 | api "query pointers resolve", "query pointer:<path> round-trips", "gaps selector matches tree.gaps"; context "query pointer: works on the context" | | |
 | R96 | `fromJSON(toJSON(t))` gives back the same address. | §13 | api "fromJSON(toJSON(t)) identity", "fromJSON(toJSON(t)) full address"; formats "fromJSON(toJSON) keeps the address" | | |
 | R97 | `registerCSV` loads a CSV as a table with inferred types (integer, numeric, date, text) unless types are given. | §13 | api "registerCSV infers types", "registerCSV table equals PostgreSQL", "registerCSV rejects ragged rows" | | |
+| R105 | `registerCSV` creates the registry when its name is new: loading data is a deliberate act, unlike registering an entry or storing an address (R45). | §13 | api "registerCSV creates a registry when the name is new" | |  |
 
 ### Workbench
 
