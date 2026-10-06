@@ -1106,6 +1106,9 @@ function scanAddress(input) {
   if (segs.some(x => x === '')) bad('Empty path segment in "' + hierarchy + '": no "//" inside the path and no trailing "/"');
   return {call, form, registry: segs[0], path: segs.slice(1).join('/'), query};
 }
+// Data keys in order. A tcxp:// address keeps the order its keys were written in, integer-like names included
+// (R20): its tree records that order, because a dict() object would list integer-like keys first.
+const dataKeys = p => p.keys || Object.keys(p.items);
 // A resolvable address (tcxp://<registry>/<path>?…) uses the same grammar as a virtual one. Its registry entry is
 // the part before "?". Data keys may have any name; their values are kept as written and given no meaning (a
 // registry entry has no handler). Parsing never looks anything up and never fetches.
@@ -1117,7 +1120,7 @@ function parseResolvable(call, registry, path, q) {
     items[k] = [{kind: 'value', value: v, type: 'text'}];
   });
   q.binds.forEach(([k, v]) => parseBinding(bindings, k, v));
-  const parsed = {call, form: 'resolvable', registry, path, mode: 'resolvable', items, bindings, context: q.context};
+  const parsed = {call, form: 'resolvable', registry, path, mode: 'resolvable', items, keys: q.data.map(([k]) => k), bindings, context: q.context};
   const root = {kind: 'reference', name: registry + '/' + path, role: 'resolvable', type: 'location'};
   const diagnostics = call ? [{level: 'info', msg: 'Calling a resolvable address (@tcxp://…) is not supported yet: external calls are not built.'}] : [];
   Object.keys(bindings).forEach(k => diagnostics.push({level: 'warn', msg: '$' + k + ' is bound but never used'}));
@@ -1511,7 +1514,7 @@ function serialize(tree, opts) {
   } else if (parsed.mode === 'math') {
     sep(); push('expr', 'key'); push('=', 'punct'); ex(parsed.items.expr[0]);
   } else if (parsed.mode === 'resolvable') {
-    Object.keys(parsed.items).forEach(k => { sep(); push(encLiteral(k), 'key'); push('=', 'punct'); push(encLiteral(String(parsed.items[k][0].value)), 'value', parsed.items[k][0]); });
+    dataKeys(parsed).forEach(k => { sep(); push(encLiteral(k), 'key'); push('=', 'punct'); push(encLiteral(String(parsed.items[k][0].value)), 'value', parsed.items[k][0]); });
   } else if (parsed.mode === 'fn') {
     parsed.fn.params.forEach(p => {
       const slot = parsed.items[p.name][0];
@@ -1743,7 +1746,7 @@ function toJSON(tree) {
     address: identity(tree), call: p.call, ...(p.form === 'resolvable' ? {form: 'resolvable'} : {}), registry: p.registry, path: p.path, profile: p.mode,
     tree: clean(tree.root), gaps: tree.gaps,
     context: p.context,
-    ...(p.mode === 'resolvable' && Object.keys(p.items).length ? {data: Object.keys(p.items).map(k => [k, p.items[k][0].value])} : {}),
+    ...(p.mode === 'resolvable' && dataKeys(p).length ? {data: dataKeys(p).map(k => [k, p.items[k][0].value])} : {}),
     // bindings for variables nothing uses (kept so fromJSON loses nothing)
     ...(() => { const extra = Object.keys(p.bindings).filter(k => !tree.slots.includes(k)).map(k => { const b = p.bindings[k];
       return clean({kind:'slot', name:k, children:[b.kind === 'call' ? b.tree.root : b]}); }); return extra.length ? {extra_bindings: extra} : {}; })()
@@ -2357,7 +2360,7 @@ function nodeLabel(n) {
 function nodeKindOf(n) { return n.kind === 'slot' ? (n.children.length ? 'variable' : 'gap') : n.kind; }
 function allPointers(tree) {
   const out = [];
-  Object.entries(tree.parsed.items).forEach(([key, list]) => list.forEach((item, i) => {
+  dataKeys(tree.parsed).map(key => [key, tree.parsed.items[key]]).forEach(([key, list]) => list.forEach((item, i) => {
     (function walk(n, path) { out.push({pointer: path, node: n}); (n.children || []).forEach((c, j) => walk(c, path + '/' + j)); })(item, '/' + key + '/' + i);
   }));
   return out;
@@ -2693,7 +2696,7 @@ class FilterGenerator {
   }
   randomPointer(tree) {
     if (tree.slots.length && this.chance(0.3)) return '/$' + this.pick(tree.slots);
-    const keys = Object.keys(tree.parsed.items);
+    const keys = dataKeys(tree.parsed);
     if (!keys.length) return null;
     const key = this.pick(keys); const list = tree.parsed.items[key];
     const idx = this.int(list.length); let node = list[idx]; const path = ['', key, idx];
