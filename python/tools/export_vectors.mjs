@@ -244,7 +244,9 @@ const CSV_CASES = [
   ['client.demo', 'extra', 'a\n1\n', null],
   ['constructor', 'constructor', 'a,b\n1,x\n', null],
   ['__proto__', '__proto__', 'a,b\n1,x\n', null],
-  ['toString', 'valueof', 'a,b\n1,x\n', null]
+  ['toString', 'valueof', 'a,b\n1,x\n', null],
+  ['csvtest.demo', 'proto_headers', 'constructor,toString,hasOwnProperty,__proto__\n1,x,2024-01-01,3.5\n', null],
+  ['csvtest.demo', 'proto_types', 'constructor,b\n1,2\n', {b: 'text'}]
 ];
 const csv = CSV_CASES.map(([reg, table, text, types]) => {
   const existed = Object.hasOwn(T.REGISTRIES, reg);
