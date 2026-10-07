@@ -1,6 +1,6 @@
 {
   "name": "@tcxp/tcxp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Typed Context Protocol (tcxp) v0.2 reference engine: one-line addresses that parse into expression trees, carry their own context, and run",
   "keywords": ["tcxp", "typed-context-protocol", "uri", "query", "sql", "expression-tree", "decision-state", "provenance"],
   "author": "Ron Itelman",
@@ -23,7 +23,8 @@
     "fuzz:writes": "node test/fuzz.mjs 1000 11 --writes",
     "compat": "node test/compat.mjs",
     "vectors": "node python/tools/export_vectors.mjs",
-    "gate": "npm run build && node test/verify.mjs && npm run build && node test/fuzz.mjs 2000 7 && node test/fuzz.mjs 1000 11 --writes && node test/compat.mjs && node test/api.mjs && node test/context.mjs && node test/formats.mjs && lean lean/Tcxp.lean",
+    "gate:js": "npm run build && node test/verify.mjs && npm run build && node test/fuzz.mjs 2000 7 && node test/fuzz.mjs 1000 11 --writes && node test/compat.mjs && node test/api.mjs && node test/context.mjs && node test/formats.mjs",
+    "gate": "npm run gate:js && lean lean/Tcxp.lean",
     "api": "node test/api.mjs",
     "context": "node test/context.mjs",
     "formats": "node test/formats.mjs"

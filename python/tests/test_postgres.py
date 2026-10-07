@@ -10,7 +10,7 @@ import datetime as dt
 import decimal
 import os
 import re
-from typing import Any, Iterator, List
+from typing import Any, Dict, Iterator, List
 
 import pytest
 
@@ -32,13 +32,17 @@ def cur() -> Iterator[Any]:
             c.execute('SET LOCAL TimeZone = UTC')
             for reg in tcxp.REGISTRIES:
                 if tcxp.REGISTRIES[reg].get('db'):
-                    schema = 'tcxp_test_' + reg.split('.')[0]
+                    schema = _schema(reg)
                     c.execute('CREATE SCHEMA ' + schema)
                     c.execute('SET LOCAL search_path TO ' + schema)
                     c.execute(tcxp.full_ddl(reg))
             yield c
     finally:
         conn.close()
+
+
+def _schema(reg: str) -> str:
+    return 'tcxp_test_' + re.sub(r'[^a-z0-9_]', '_', reg)
 
 
 def nv(v: Any) -> Any:
@@ -73,14 +77,19 @@ def test_address_matches_postgres(cur: Any, cid: str, uri: str, ref: Any) -> Non
     tree = tcxp.parse_uri(uri)
     assert tcxp.serialize(tree)['uri'] == uri
     assert tcxp.serialize(tcxp.parse_uri(tcxp.strict_form(uri)))['uri'] == uri
-    mem = tcxp.execute(tree)
     mode = tree['parsed']['mode']
-    if mem['kind'] == 'gap' or mode not in ('sql', 'math'):
+    if mode == 'write':
+        _compare_write(cur, tree, tcxp.parse_uri('@' + uri))
+        if ref:
+            assert re.sub(r'\s+', ' ', tcxp.to_sql(tcxp.parse_uri('@' + uri), inline=True)['sql']) == ref  # type: ignore[index]
+        return
+    mem = tcxp.execute(tree, store=tcxp.new_store())
+    if mem['kind'] == 'halt' or mode not in ('sql', 'math'):
         return
     g = tcxp.to_sql(tree)
     assert g is not None
     if mode == 'sql':
-        cur.execute('SET LOCAL search_path TO tcxp_test_' + tree['parsed']['registry'].split('.')[0])
+        cur.execute('SET LOCAL search_path TO ' + _schema(tree['parsed']['registry']))
     # parameters travel as untyped text, as PGlite sends them, so PostgreSQL infers their types
     cur.execute(g['sql'], [None if p is None else to_string(p) for p in g['params']])
     pg_rows: List[List[Any]] = [[nv(x) for x in r] for r in cur.fetchall()]
@@ -97,6 +106,96 @@ def test_address_matches_postgres(cur: Any, cid: str, uri: str, ref: Any) -> Non
     if ref:
         inline = re.sub(r'\s+', ' ', tcxp.to_sql(tree, inline=True)['sql'])  # type: ignore[index]
         assert inline == ref
+
+
+def _rows_of(cur: Any, sql: str) -> List[str]:
+    cur.execute(sql)
+    return sorted((stringify([nv(x) for x in r]) for r in cur.fetchall()))
+
+
+def _pg_tables(cur: Any, reg: str) -> Dict[str, List[str]]:
+    return {t['name']: _rows_of(cur, 'SELECT * FROM ' + t['name']) for t in tcxp.REGISTRIES[reg]['db']['schema']['tables']}
+
+
+def _mem_tables(store: Dict[str, Any], reg: str) -> Dict[str, List[str]]:
+    return {t['name']: sorted(stringify([nv(x) for x in r]) for r in tcxp.table_rows(reg, t['name'], store))
+            for t in tcxp.REGISTRIES[reg]['db']['schema']['tables']}
+
+
+def _seed_tables(reg: str) -> Dict[str, List[str]]:
+    return {t['name']: sorted(stringify([nv(x) for x in r]) for r in tcxp.REGISTRIES[reg]['db']['seed'][t['name']])
+            for t in tcxp.REGISTRIES[reg]['db']['schema']['tables']}
+
+
+def _compare_write(cur: Any, plain: Dict[str, Any], at: Dict[str, Any]) -> None:
+    """Port of compareWrite (test/writes-lib.mjs): preview, write and inverse in the engine and in PostgreSQL."""
+    reg = at['parsed']['registry']
+    cur.execute('SET LOCAL search_path TO ' + _schema(reg))
+    err_diag = next((d for d in at['diagnostics'] if d['level'] in ('error', 'refused')), None)
+    if err_diag:
+        with pytest.raises(tcxp.TcxpError) as e:
+            tcxp.execute(at, store=tcxp.new_store())
+        assert e.value.code == err_diag.get('code')
+        return
+    if at['gaps']:
+        store = tcxp.new_store()
+        assert tcxp.execute(plain, store=store)['kind'] == 'halt' and tcxp.execute(at, store=store)['kind'] == 'halt'
+        assert not tcxp.data_changed(store)
+        return
+    store = tcxp.new_store()
+    pv = mem = mem_err = pg_err = None
+    try:
+        pv = tcxp.execute(plain, store=store)
+    except tcxp.TcxpError as e:
+        mem_err = e
+    assert not tcxp.data_changed(store), 'a preview must not change data'
+    if not mem_err:
+        try:
+            mem = tcxp.execute(at, store=store)
+        except tcxp.TcxpError as e:
+            mem_err = e
+    g = tcxp.to_sql(at)
+    assert g is not None
+    cur.execute('SAVEPOINT w')
+    try:
+        cur.execute(g['sql'], [None if x is None else to_string(x) for x in g['params']])
+        pg_ret = [[nv(x) for x in r] for r in cur.fetchall()] if cur.description else []
+        pg_cols = [d.name for d in cur.description] if cur.description else []
+        pg_count = cur.rowcount
+    except psycopg.Error as e:
+        pg_err = e
+    if mem_err or pg_err:
+        cur.execute('ROLLBACK TO SAVEPOINT w')
+        assert mem_err is not None and pg_err is not None, 'engine: %s; PostgreSQL: %s' % (mem_err, pg_err)
+        assert mem_err.code == pg_err.sqlstate, (mem_err.code, pg_err.sqlstate, str(mem_err))
+        return
+    assert pv is not None and mem is not None
+    mem_ret = [[nv(x) for x in r] for r in mem['returning']['rows']]
+    assert pv['kind'] == 'preview' and pv['count'] == mem['count']
+    assert sorted(stringify([nv(x) for x in r]) for r in pv['returning']['rows']) == sorted(stringify(r) for r in mem_ret)
+    assert pg_count == mem['count']
+    assert sorted(stringify(r) for r in pg_ret) == sorted(stringify(r) for r in mem_ret)
+    if at['parsed']['items'].get('returning'):
+        assert pg_cols == mem['returning']['columns']
+    assert _pg_tables(cur, reg) == _mem_tables(store, reg)
+    for u in mem['inverse']:
+        it = tcxp.parse_uri(tcxp.full_address(u))   # an inverse is a bare reference: it runs with a fresh context (R14)
+        tcxp.execute(it, store=store)
+        ig = tcxp.to_sql(it)
+        assert ig is not None
+        cur.execute(ig['sql'], [None if x is None else to_string(x) for x in ig['params']])
+    assert _pg_tables(cur, reg) == _seed_tables(reg) == _mem_tables(store, reg)
+    assert not tcxp.data_changed(store)
+    cur.execute('ROLLBACK TO SAVEPOINT w')
+
+
+@pytest.mark.parametrize('index', range(0, 1000, 1))
+def test_generated_write_matches_postgres(cur: Any, index: int, _stream: List[str] = []) -> None:  # noqa: B006
+    if not _stream:
+        g = tcxp.FilterGenerator(11)
+        _stream.extend(g.next_write() for _ in range(1000))
+    plain = tcxp.parse_uri(_stream[index])
+    _compare_write(cur, plain, tcxp.parse_uri('@' + _stream[index]))
 
 
 def test_cases_cover_the_collection() -> None:

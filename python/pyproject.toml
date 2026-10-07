@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tcxp"
-version = "0.1.0"
-description = "Typed Context Protocol (tcxp) v0.1 reference engine: one-line addresses that parse into expression trees, carry their own context, and run"
+version = "0.2.0"
+description = "Typed Context Protocol (tcxp) v0.2 reference engine: one-line addresses that parse into expression trees, carry their own context, and run"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
